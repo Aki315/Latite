@@ -15,6 +15,8 @@
 #include "modules/game/ToggleSprintSneak.h"
 #include "modules/game/BehindYou.h"
 #include "modules/game/ThirdPersonNametag.h"
+#include "modules/game/ArmorNametag.h"
+#include "modules/game/OffhandSwap.h"
 #include "modules/game/EnvironmentChanger.h"
 #include "modules/game/TextHotkey.h"
 #include "modules/game/Freelook.h"
@@ -96,6 +98,8 @@ ModuleManager::ModuleManager() {
     this->items.push_back(std::make_shared<ReachDisplay>());
     this->items.push_back(std::make_shared<MovableBossbar>());
     this->items.push_back(std::make_shared<ThirdPersonNametag>());
+    this->items.push_back(std::make_shared<ArmorNametag>());
+    this->items.push_back(std::make_shared<OffhandSwap>());
     this->items.push_back(std::make_shared<EnvironmentChanger>());
     this->items.push_back(std::make_shared<CommandShortcuts>());
     this->items.push_back(std::make_shared<DiscordPresence>());
