@@ -28,6 +28,7 @@ private:
 
     void drawNumber(D2DUtil& dc, Vec2 const& anchor, float scale, float health, float maxHealth);
     void drawHearts(D2DUtil& dc, Vec2 const& anchor, float scale, float health, float maxHealth);
+    void drawLabel(D2DUtil& dc, Vec2 const& anchor, float scale, std::wstring const& text, d2d::Color const& color);
 
     EnumData style;
     EnumData numberFormat;
@@ -37,6 +38,7 @@ private:
     ValueType colorByHealth = BoolValue(true);
     ValueType showBackground = BoolValue(true);
     ValueType playersOnly = BoolValue(true);
+    ValueType debug = BoolValue(false);
     ValueType maxDistance = FloatValue(32.f);
     ValueType heightOffset = FloatValue(0.75f);
 };

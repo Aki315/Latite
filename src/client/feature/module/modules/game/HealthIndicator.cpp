@@ -2,6 +2,7 @@
 #include "HealthIndicator.h"
 
 #include "util/WorldToScreen.h"
+#include "mc/common/entity/component/AttributesComponent.h"
 
 #include <algorithm>
 #include <cmath>
@@ -32,6 +33,7 @@ namespace {
         float distance;
         float health;
         float maxHealth;
+        std::wstring label; // only set in debug mode
     };
 }
 
@@ -65,7 +67,9 @@ HealthIndicator::HealthIndicator()
                LocalizeString::get("client.module.healthIndicator.showBackground.desc"), showBackground);
     addSetting("playersOnly", LocalizeString::get("client.module.healthIndicator.playersOnly.name"),
                LocalizeString::get("client.module.healthIndicator.playersOnly.desc"), playersOnly);
-    addSliderSetting("textSize", LocalizeString::get("client.module.healthIndicator.textSize.name"),
+    addSetting("debug", LocalizeString::get("client.module.healthIndicator.debug.name"),
+               LocalizeString::get("client.module.healthIndicator.debug.desc"), debug);
+    addSliderSetting("textSize",LocalizeString::get("client.module.healthIndicator.textSize.name"),
                      LocalizeString::get("client.module.healthIndicator.textSize.desc"), textSize, FloatValue(16.f),
                      FloatValue(48.f), FloatValue(1.f));
     addSliderSetting("maxDistance", LocalizeString::get("client.module.healthIndicator.maxDistance.name"),
@@ -97,15 +101,37 @@ void HealthIndicator::onRenderOverlay(Event&) {
 
     std::vector<Target> targets;
 
+    const bool debugMode = std::get<BoolValue>(debug);
+
     for (auto* actor : level->getRuntimeActorList()) {
         if (!actor || actor == lp) continue;
-        if (onlyPlayers && !actor->isPlayer()) continue;
+        if (!debugMode && onlyPlayers && !actor->isPlayer()) continue;
 
-        auto health = actor->getHealth();
-        if (!health.has_value() || *health <= 0.f) continue;
+        // Read the health attribute directly with null checks instead of Actor::getHealth(), which
+        // dereferences the attributes component without checking that the entity actually has one.
+        auto* attrs = actor->tryGetComponent<SDK::AttributesComponent>();
+        auto* inst = attrs ? attrs->baseAttributes.getInstance(SDK::Attributes::Health.mIDValue) : nullptr;
 
-        float maxHealth = actor->getMaxHealth().value_or(20.f);
-        if (maxHealth <= 0.f) maxHealth = 20.f;
+        std::wstring label;
+        if (debugMode) {
+            // Shows, for every entity, exactly why it would or wouldn't get an indicator.
+            label = std::format(L"type={} {} ", actor->getEntityTypeID(), actor->isPlayer() ? L"PLAYER" : L"mob");
+            if (!attrs) {
+                label += L"NO ATTR COMPONENT";
+            } else if (!inst) {
+                label += L"NO HEALTH ATTR";
+            } else {
+                label += std::format(L"hp={:.1f}/{:.1f}", inst->value, inst->maxValue);
+            }
+        }
+
+        if (!inst || !(inst->value > 0.f)) {
+            if (!debugMode) continue;
+        }
+
+        float healthValue = inst ? inst->value : 0.f;
+        float maxHealth = inst ? inst->maxValue : 20.f;
+        if (!(maxHealth > 0.f)) maxHealth = 20.f;
 
         Vec3 cur = actor->getPos();
         Vec3 old = actor->getPosOld();
@@ -125,7 +151,7 @@ void HealthIndicator::onRenderOverlay(Event&) {
         auto screen = WorldToScreen::convert(head);
         if (!screen.has_value()) continue;
 
-        targets.push_back({ *screen, distance, *health, maxHealth });
+        targets.push_back({ *screen, distance, healthValue, maxHealth, std::move(label) });
     }
 
     if (targets.empty()) return;
@@ -142,7 +168,9 @@ void HealthIndicator::onRenderOverlay(Event&) {
         // Shrink slightly with distance so far players don't clutter the screen.
         float scale = std::clamp(6.f / std::max(t.distance, 1.f), 0.6f, 1.f);
 
-        if (hearts && std::ceil(t.maxHealth / 2.f) <= kMaxHeartsShown) {
+        if (!t.label.empty()) {
+            drawLabel(dc, t.screen, scale, t.label, d2d::Colors::YELLOW);
+        } else if (hearts && std::ceil(t.maxHealth / 2.f) <= kMaxHeartsShown) {
             drawHearts(dc, t.screen, scale, t.health, t.maxHealth);
         } else {
             // Also the fallback when a player has too many hearts to fit a readable row.
@@ -164,6 +192,11 @@ void HealthIndicator::drawNumber(D2DUtil& dc, Vec2 const& anchor, float scale, f
                            ? healthGradient(health / maxHealth)
                            : d2d::Color(std::get<ColorValue>(textColor).getMainColor());
 
+    drawLabel(dc, anchor, scale, text, color);
+}
+
+void HealthIndicator::drawLabel(D2DUtil& dc, Vec2 const& anchor, float scale, std::wstring const& text,
+                                d2d::Color const& color) {
     const float size = std::get<FloatValue>(textSize) * scale;
     const float pad = size * 0.2f;
     const Vec2 ts = dc.getTextSize(text, kFont, size, true, false);
