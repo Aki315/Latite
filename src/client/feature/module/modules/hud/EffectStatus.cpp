@@ -1,10 +1,15 @@
 #include "pch.h"
 #include "EffectStatus.h"
 
+#include "client/event/events/RenderLayerEvent.h"
 #include "mc/common/client/game/ClientInstance.h"
+#include "mc/common/client/gui/ScreenView.h"
+#include "mc/common/client/gui/controls/UIControl.h"
+#include "mc/common/client/gui/controls/VisualTree.h"
 #include "mc/common/entity/component/MobEffectsComponent.h"
 #include "mc/common/world/actor/player/Player.h"
 
+#include <algorithm>
 #include <format>
 #include <string>
 #include <vector>
@@ -44,6 +49,87 @@ namespace {
         if (time) line += L" (" + formatTime(e.duration) + L")";
         return line;
     }
+
+    // File name (without extension) of the game's own effect icon, textures/ui/<name>.png, for an effect id.
+    // Returns nullptr when the game has no icon for it (instant effects never stay in the list, and saturation has
+    // none), in which case that line just gets an empty icon slot so the text stays aligned.
+    const char* iconName(int id) {
+        switch (id) {
+        case 1: return "speed_effect";
+        case 2: return "slowness_effect";
+        case 3: return "haste_effect";
+        case 4: return "mining_fatigue_effect";
+        case 5: return "strength_effect";
+        case 8: return "jump_boost_effect";
+        case 9: return "nausea_effect";
+        case 10: return "regeneration_effect";
+        case 11: return "resistance_effect";
+        case 12: return "fire_resistance_effect";
+        case 13: return "water_breathing_effect";
+        case 14: return "invisibility_effect";
+        case 15: return "blindness_effect";
+        case 16: return "night_vision_effect";
+        case 17: return "hunger_effect";
+        case 18: return "weakness_effect";
+        case 19: return "poison_effect";
+        case 20: return "wither_effect";
+        case 21: return "health_boost_effect";
+        case 22: return "absorption_effect";
+        case 24: return "levitation_effect";
+        case 25: return "poison_effect"; // fatal poison has no icon of its own
+        case 26: return "conduit_power_effect";
+        case 27: return "slow_falling_effect";
+        case 28: return "bad_omen_effect";
+        case 29: return "village_hero_effect";
+        case 30: return "darkness_effect";
+        case 31: return "trial_omen_effect";
+        case 32: return "wind_charged_effect";
+        case 33: return "weaving_effect";
+        case 34: return "oozing_effect";
+        case 35: return "infested_effect";
+        case 36: return "raid_omen_effect";
+        default: return nullptr;
+        }
+    }
+
+    // Reads the player's effects. In the HUD editor (and as the default preview) it returns sample effects so there is
+    // always something to move. The debug text, when asked for, is appended to *dbg.
+    std::vector<SDK::EffectData> collectEffects(bool sample, bool debugMode, std::wstringstream* dbg) {
+        if (sample) {
+            return { { 1, 20 * 90, 1 }, { 5, 20 * 45, 1 }, { 10, 20 * 12, 0 } };
+        }
+
+        auto* ci = SDK::ClientInstance::get();
+        auto* plr = ci ? ci->getLocalPlayer() : nullptr;
+        if (!plr) return {};
+
+        auto* comp = plr->tryGetComponent<SDK::MobEffectsComponent>();
+        if (!comp) {
+            if (debugMode && dbg) *dbg << L"[debug] no MobEffectsComponent (normal while you have no effects)";
+            return {};
+        }
+
+        auto effects = comp->read();
+
+        if (debugMode && dbg) {
+            const auto layout = comp->detectLayout();
+            *dbg << std::format(L"[debug] bytes=0x{:X} stride=0x{:X} ampOff=0x{:X} active={} effects={}\n",
+                                comp->byteSize(), layout.stride, layout.ampOffset, layout.active, effects.size());
+            *dbg << L"[debug] first element ints:";
+            for (size_t i = 0; i < 12; ++i) *dbg << std::format(L" {}", comp->rawInt(i));
+            *dbg << L"\n[debug] id+duration candidates:";
+            const auto hits = comp->findCandidates(6);
+            if (hits.empty()) *dbg << L" none";
+            for (size_t off : hits) {
+                *dbg << std::format(L" +0x{:X}(id={} dur={})", off, comp->rawInt(off / 4), comp->rawInt(off / 4 + 1));
+            }
+            if (!hits.empty()) {
+                *dbg << L"\n[debug] ints at first candidate:";
+                for (size_t i = 0; i < 12; ++i) *dbg << std::format(L" {}", comp->rawInt(hits[0] / 4 + i));
+            }
+        }
+        return effects;
+    }
 } // namespace
 
 EffectStatus::EffectStatus()
@@ -53,59 +139,147 @@ EffectStatus::EffectStatus()
                LocalizeString::get("client.textmodule.effectStatus.showLevel.desc"), showLevel);
     addSetting("showTime", LocalizeString::get("client.textmodule.effectStatus.showTime.name"),
                LocalizeString::get("client.textmodule.effectStatus.showTime.desc"), showTime);
+    addSetting("showIcons", LocalizeString::get("client.textmodule.effectStatus.showIcons.name"),
+               LocalizeString::get("client.textmodule.effectStatus.showIcons.desc"), showIcons);
+    addSetting("hideVanilla", LocalizeString::get("client.textmodule.effectStatus.hideVanilla.name"),
+               LocalizeString::get("client.textmodule.effectStatus.hideVanilla.desc"), hideVanilla);
     addSetting("debug", LocalizeString::get("client.textmodule.effectStatus.debug.name"),
                LocalizeString::get("client.textmodule.effectStatus.debug.desc"), debug);
+
+    // Same technique as MovablePaperdoll / MovableBossbar: after the HUD screen has been set up, adjust its controls.
+    // It has to keep running while the module is off, so that Minecraft's display can be given back.
+    listen<RenderLayerEvent>(static_cast<EventListenerFunc>(&EffectStatus::onRenderLayer), true,
+                             10 /*need to overpower the hud renderer*/);
+}
+
+bool EffectStatus::forceMinecraftRenderer() {
+    const bool icons = std::get<BoolValue>(showIcons);
+    return icons || TextModule::forceMinecraftRenderer();
+}
+
+void EffectStatus::onRenderLayer(Event& evG) {
+    auto& ev = reinterpret_cast<RenderLayerEvent&>(evG);
+
+    auto* view = ev.getScreenView();
+    if (!view || !view->visualTree || !view->visualTree->rootControl) return;
+
+    auto* root = view->visualTree->rootControl;
+    if (root->name != "hud_screen") return;
+
+    // "mob_effects_renderer" is the control Minecraft draws its own effect icons with.
+    auto* vanilla = root->findFirstDescendantWithName("mob_effects_renderer");
+    if (!vanilla) return;
+
+    constexpr float hiddenPos = 9999.f; // very scuffed, but it is how the other movable HUD modules do it
+    const bool hide = isEnabled() && isActive() && std::get<BoolValue>(hideVanilla);
+
+    if (hide) {
+        // Remember where Minecraft put it, so it can be restored later.
+        if (vanilla->position.x < hiddenPos) savedVanillaPos = vanilla->position;
+        vanilla->position = { hiddenPos, hiddenPos };
+        vanillaHidden = true;
+    } else if (vanillaHidden) {
+        if (vanilla->position.x >= hiddenPos) vanilla->position = savedVanillaPos;
+        vanillaHidden = false;
+    }
+}
+
+void EffectStatus::render(DrawUtil& dc, bool isDefault, bool inEditor) {
+    const bool icons = std::get<BoolValue>(showIcons);
+    const bool debugMode = std::get<BoolValue>(debug);
+
+    // Debug mode prints plain text lines, and without the Minecraft renderer there are no game textures to draw.
+    if (!icons || debugMode || !dc.isMinecraft()) {
+        TextModule::render(dc, isDefault, inEditor);
+        return;
+    }
+
+    renderWithIcons(static_cast<MCDrawUtil&>(dc), isDefault, inEditor);
+}
+
+void EffectStatus::renderWithIcons(MCDrawUtil& dc, bool isDefault, bool inEditor) {
+    const bool level = std::get<BoolValue>(showLevel);
+    const bool time = std::get<BoolValue>(showTime);
+    const bool fill = std::get<BoolValue>(fillBg);
+    const bool outline = std::get<BoolValue>(showOutline);
+    const bool fixedSize = std::get<BoolValue>(customSize);
+
+    const float textSize = std::get<FloatValue>(textSizeS);
+    const float padXv = fill ? static_cast<float>(std::get<FloatValue>(padX)) : 0.f;
+    const float padYv = fill ? static_cast<float>(std::get<FloatValue>(padY)) * 2.f : 0.f;
+
+    d2d::Color bgCol = std::get<ColorValue>(bgColor).getMainColor();
+    d2d::Color textCol = std::get<ColorValue>(textColor).getMainColor();
+    d2d::Color outlineCol = std::get<ColorValue>(outlineColor).getMainColor();
+
+    const auto effects = collectEffects(isDefault || inEditor, false, nullptr);
+
+    // Every row is as tall as a line of text, and the icon is a square of that size.
+    const auto font = Renderer::FontSelection::SecondaryLight;
+    const float rowH = std::max(dc.getTextSize(L"Ag", font, textSize, false).y, 8.f);
+    const float iconSize = rowH;
+    const float iconGap = rowH * 0.3f;
+    const float rowGap = rowH * 0.1f;
+
+    std::vector<std::wstring> lines;
+    lines.reserve(effects.size());
+    float widestText = 0.f;
+    for (auto const& e : effects) {
+        lines.push_back(formatLine(e, level, time));
+        widestText = std::max(widestText, dc.getTextSize(lines.back(), font, textSize, false).x);
+    }
+
+    const float rowCount = static_cast<float>(std::max<size_t>(lines.size(), 1));
+    const float width = fixedSize ? static_cast<float>(std::get<FloatValue>(bgX))
+                                  : iconSize + iconGap + widestText + padXv * 2.f;
+    const float height = fixedSize ? static_cast<float>(std::get<FloatValue>(bgY))
+                                   : rowCount * rowH + (rowCount - 1.f) * rowGap + padYv * 2.f;
+
+    d2d::Rect rc = d2d::Rect(0.f, 0.f, width, height);
+    const float rad = (static_cast<float>(std::get<FloatValue>(radius)) / 10.f) * (rc.getHeight() / 2.f);
+
+    if (!lines.empty()) {
+        if (outline) dc.drawRoundedRectangle(rc, outlineCol, rad, std::get<FloatValue>(outlineThickness));
+        if (fill) dc.fillRoundedRectangle(rc, bgCol, rad);
+
+        float y = padYv;
+        for (size_t i = 0; i < lines.size(); ++i) {
+            if (const char* name = iconName(effects[i].id)) {
+                SDK::TexturePtr tex {};
+                dc.renderCtx->getTexture(
+                    &tex,
+                    SDK::ResourceLocation(std::string("/resource_packs/vanilla/textures/ui/") + name,
+                                          SDK::ResourceFileSystem::AppPackage),
+                    false);
+                // textureData stays empty when the game could not load the texture.
+                if (tex.textureData) dc.drawImage(tex, { padXv, y }, { iconSize, iconSize }, d2d::Colors::WHITE);
+            }
+
+            d2d::Rect textRc = d2d::Rect(padXv + iconSize + iconGap, y, width - padXv, y + rowH);
+            dc.drawText(textRc, lines[i], textCol, font, textSize, DWRITE_TEXT_ALIGNMENT_LEADING,
+                        DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            y += rowH + rowGap;
+        }
+    }
+
+    this->rect.right = rect.left + width;
+    this->rect.bottom = rect.top + height;
+
+    dc.flush();
 }
 
 std::wstringstream EffectStatus::text(bool isDefault, bool inEditor) {
     std::wstringstream out;
     const bool level = std::get<BoolValue>(showLevel);
     const bool time = std::get<BoolValue>(showTime);
-
-    // In the HUD editor (and as the default preview) show sample lines so there is always something to move.
-    if (isDefault || inEditor) {
-        const SDK::EffectData samples[] = { { 1, 20 * 90, 1 }, { 5, 20 * 45, 1 }, { 10, 20 * 12, 0 } };
-        bool firstLine = true;
-        for (auto const& s : samples) {
-            if (!firstLine) out << L"\n";
-            out << formatLine(s, level, time);
-            firstLine = false;
-        }
-        return out;
-    }
-
-    auto* ci = SDK::ClientInstance::get();
-    auto* plr = ci ? ci->getLocalPlayer() : nullptr;
-    if (!plr) return out;
-
-    auto* comp = plr->tryGetComponent<SDK::MobEffectsComponent>();
     const bool debugMode = std::get<BoolValue>(debug);
 
-    if (!comp) {
-        if (debugMode) out << L"[debug] no MobEffectsComponent (normal while you have no effects)";
-        return out;
-    }
+    std::wstringstream dbg;
+    const auto effects = collectEffects(isDefault || inEditor, debugMode, &dbg);
 
-    const auto effects = comp->read();
-
-    if (debugMode) {
-        const auto layout = comp->detectLayout();
-        out << std::format(L"[debug] bytes=0x{:X} stride=0x{:X} ampOff=0x{:X} active={} effects={}\n",
-                           comp->byteSize(), layout.stride, layout.ampOffset, layout.active, effects.size());
-        out << L"[debug] first element ints:";
-        for (size_t i = 0; i < 12; ++i) out << std::format(L" {}", comp->rawInt(i));
-        out << L"\n[debug] id+duration candidates:";
-        const auto hits = comp->findCandidates(6);
-        if (hits.empty()) out << L" none";
-        for (size_t off : hits) {
-            out << std::format(L" +0x{:X}(id={} dur={})", off, comp->rawInt(off / 4), comp->rawInt(off / 4 + 1));
-        }
-        if (!hits.empty()) {
-            out << L"\n[debug] ints at first candidate:";
-            for (size_t i = 0; i < 12; ++i) out << std::format(L" {}", comp->rawInt(hits[0] / 4 + i));
-        }
-        if (!effects.empty()) out << L"\n";
-    }
+    const std::wstring debugText = dbg.str();
+    out << debugText;
+    if (!debugText.empty() && !effects.empty()) out << L"\n";
 
     bool firstLine = true;
     for (auto const& e : effects) {
