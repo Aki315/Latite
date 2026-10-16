@@ -111,13 +111,20 @@ void HealthIndicator::onRenderOverlay(Event&) {
         // dereferences the attributes component without checking that the entity actually has one.
         auto* attrs = actor->tryGetComponent<SDK::AttributesComponent>();
         SDK::AttributeInstance* inst = nullptr;
-        bool lenient = false;
+        const wchar_t* via = L"";
         if (attrs) {
-            inst = attrs->baseAttributes.getInstance(SDK::Attributes::Health.mIDValue);
+            auto& map = attrs->baseAttributes;
+            const int healthId = SDK::Attributes::Health.mIDValue;
+            inst = map.getInstance(healthId);
             if (!inst) {
-                // Strict lookup refuses to work when the id/instance vectors differ in size.
-                inst = attrs->baseAttributes.getInstanceLenient(SDK::Attributes::Health.mIDValue);
-                lenient = inst != nullptr;
+                // Players: 17 ids vs 18 instances (id 6 missing from `ids`), so the strict lookup refuses to
+                // work. Instances are one contiguous run of ids, so index them by (id - first id).
+                inst = map.getInstanceDense(healthId);
+                via = L" (dense)";
+            }
+            if (!inst) {
+                inst = map.getInstanceLenient(healthId);
+                via = L" (lenient)";
             }
             // Reject garbage so a bad lookup can never show nonsense.
             if (inst && !(inst->maxValue > 0.f && inst->maxValue <= 2048.f && inst->value >= 0.f &&
@@ -134,14 +141,15 @@ void HealthIndicator::onRenderOverlay(Event&) {
                 label += L"NO ATTR COMPONENT";
             } else if (!inst) {
                 auto& map = attrs->baseAttributes;
-                label += std::format(L"NO HEALTH ATTR ids={} inst={} [", map.idCount(), map.instanceCount());
+                label += std::format(L"NO HEALTH ATTR ids={} inst={} last={} [", map.idCount(), map.instanceCount(),
+                                     map.lastId());
                 size_t shown = std::min<size_t>(map.idCount(), 14);
                 for (size_t i = 0; i < shown; ++i) {
                     label += std::format(L"{}{}", i ? L"," : L"", map.idAt(i));
                 }
                 label += map.idCount() > shown ? L",...]" : L"]";
             } else {
-                label += std::format(L"hp={:.1f}/{:.1f}{}", inst->value, inst->maxValue, lenient ? L" (lenient)" : L"");
+                label += std::format(L"hp={:.1f}/{:.1f}{}", inst->value, inst->maxValue, via);
             }
         }
 
