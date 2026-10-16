@@ -89,10 +89,21 @@ std::wstringstream EffectStatus::text(bool isDefault, bool inEditor) {
     const auto effects = comp->read();
 
     if (debugMode) {
-        out << std::format(L"[debug] bytes=0x{:X} stride=0x{:X} effects={}\n", comp->byteSize(),
-                           comp->detectStride(), effects.size());
+        const auto layout = comp->detectLayout();
+        out << std::format(L"[debug] bytes=0x{:X} stride=0x{:X} ampOff=0x{:X} active={} effects={}\n",
+                           comp->byteSize(), layout.stride, layout.ampOffset, layout.active, effects.size());
         out << L"[debug] first element ints:";
         for (size_t i = 0; i < 12; ++i) out << std::format(L" {}", comp->rawInt(i));
+        out << L"\n[debug] id+duration candidates:";
+        const auto hits = comp->findCandidates(6);
+        if (hits.empty()) out << L" none";
+        for (size_t off : hits) {
+            out << std::format(L" +0x{:X}(id={} dur={})", off, comp->rawInt(off / 4), comp->rawInt(off / 4 + 1));
+        }
+        if (!hits.empty()) {
+            out << L"\n[debug] ints at first candidate:";
+            for (size_t i = 0; i < 12; ++i) out << std::format(L" {}", comp->rawInt(hits[0] / 4 + i));
+        }
         if (!effects.empty()) out << L"\n";
     }
 
