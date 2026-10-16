@@ -117,6 +117,10 @@ void HealthIndicator::onRenderOverlay(Event&) {
             const int healthId = SDK::Attributes::Health.mIDValue;
             inst = map.getInstance(healthId);
             if (!inst) {
+                inst = map.getInstanceByStride(healthId);
+                via = L" (stride)";
+            }
+            if (!inst) {
                 // Players: 17 ids vs 18 instances (id 6 missing from `ids`), so the strict lookup refuses to
                 // work. Instances are one contiguous run of ids, so index them by (id - first id).
                 inst = map.getInstanceDense(healthId);
@@ -143,6 +147,7 @@ void HealthIndicator::onRenderOverlay(Event&) {
                 auto& map = attrs->baseAttributes;
                 label += std::format(L"NO HEALTH ATTR ids={} inst={} last={} [", map.idCount(), map.instanceCount(),
                                      map.lastId());
+                label += std::format(L"stride=0x{:X} ", map.realStride());
                 size_t shown = std::min<size_t>(map.idCount(), 14);
                 for (size_t i = 0; i < shown; ++i) {
                     label += std::format(L"{}{}", i ? L"," : L"", map.idAt(i));
