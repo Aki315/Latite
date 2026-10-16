@@ -110,7 +110,21 @@ void HealthIndicator::onRenderOverlay(Event&) {
         // Read the health attribute directly with null checks instead of Actor::getHealth(), which
         // dereferences the attributes component without checking that the entity actually has one.
         auto* attrs = actor->tryGetComponent<SDK::AttributesComponent>();
-        auto* inst = attrs ? attrs->baseAttributes.getInstance(SDK::Attributes::Health.mIDValue) : nullptr;
+        SDK::AttributeInstance* inst = nullptr;
+        bool lenient = false;
+        if (attrs) {
+            inst = attrs->baseAttributes.getInstance(SDK::Attributes::Health.mIDValue);
+            if (!inst) {
+                // Strict lookup refuses to work when the id/instance vectors differ in size.
+                inst = attrs->baseAttributes.getInstanceLenient(SDK::Attributes::Health.mIDValue);
+                lenient = inst != nullptr;
+            }
+            // Reject garbage so a bad lookup can never show nonsense.
+            if (inst && !(inst->maxValue > 0.f && inst->maxValue <= 2048.f && inst->value >= 0.f &&
+                          inst->value <= inst->maxValue + 1024.f)) {
+                inst = nullptr;
+            }
+        }
 
         std::wstring label;
         if (debugMode) {
@@ -119,9 +133,15 @@ void HealthIndicator::onRenderOverlay(Event&) {
             if (!attrs) {
                 label += L"NO ATTR COMPONENT";
             } else if (!inst) {
-                label += L"NO HEALTH ATTR";
+                auto& map = attrs->baseAttributes;
+                label += std::format(L"NO HEALTH ATTR ids={} inst={} [", map.idCount(), map.instanceCount());
+                size_t shown = std::min<size_t>(map.idCount(), 14);
+                for (size_t i = 0; i < shown; ++i) {
+                    label += std::format(L"{}{}", i ? L"," : L"", map.idAt(i));
+                }
+                label += map.idCount() > shown ? L",...]" : L"]";
             } else {
-                label += std::format(L"hp={:.1f}/{:.1f}", inst->value, inst->maxValue);
+                label += std::format(L"hp={:.1f}/{:.1f}{}", inst->value, inst->maxValue, lenient ? L" (lenient)" : L"");
             }
         }
 
