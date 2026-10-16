@@ -22,7 +22,10 @@
 #include "modules/game/HiveTranslate.h"
 #include "modules/game/KillNotification.h"
 #include "modules/game/Gyro.h"
+#include "modules/game/ArmorNametag.h"
 #include "modules/game/HealthIndicator.h"
+#include "modules/game/ModernKeybindHandling.h"
+#include "modules/hud/EffectStatus.h"
 
 #include "modules/visual/Fullbright.h"
 #include "modules/visual/MotionBlur.h"
@@ -116,6 +119,9 @@ ModuleManager::ModuleManager() {
     this->items.push_back(std::make_shared<SkinStealer>());
     this->items.push_back(std::make_shared<KillNotification>());
     this->items.push_back(std::make_shared<HealthIndicator>());
+    this->items.push_back(std::make_shared<ArmorNametag>());
+    this->items.push_back(std::make_shared<ModernKeybindHandling>());
+    this->items.push_back(std::make_shared<EffectStatus>());
 
     for (auto& mod : items) {
         mod->onInit();
