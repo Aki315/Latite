@@ -24,7 +24,6 @@
 #include "modules/game/Gyro.h"
 #include "modules/game/ArmorNametag.h"
 #include "modules/game/HealthIndicator.h"
-#include "modules/game/ModernKeybindHandling.h"
 #include "modules/hud/EffectStatus.h"
 
 #include "modules/visual/Fullbright.h"
