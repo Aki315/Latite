@@ -119,7 +119,6 @@ ModuleManager::ModuleManager() {
     this->items.push_back(std::make_shared<KillNotification>());
     this->items.push_back(std::make_shared<HealthIndicator>());
     this->items.push_back(std::make_shared<ArmorNametag>());
-    this->items.push_back(std::make_shared<ModernKeybindHandling>());
     this->items.push_back(std::make_shared<EffectStatus>());
 
     for (auto& mod : items) {
