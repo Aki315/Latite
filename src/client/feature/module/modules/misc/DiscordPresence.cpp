@@ -276,8 +276,8 @@ DiscordIpcClient::Activity DiscordPresence::makeActivity() const {
         activity.state = std::string(activeServer->name);
         activity.largeImageKey = std::string(activeServer->logoKey);
         activity.largeImageText = std::string(activeServer->logoTooltip);
-        activity.smallImageKey = "latite";
-        activity.smallImageText = "Latite Client Logo";
+        activity.smallImageKey = "femboy";
+        activity.smallImageText = "Femboy Client Logo";
         return activity;
     }
 
@@ -298,7 +298,7 @@ DiscordIpcClient::Activity DiscordPresence::makeActivity() const {
 
     activity.largeImageKey = "minecraft";
     activity.largeImageText = "Minecraft Bedrock Logo";
-    activity.smallImageKey = "latite";
-    activity.smallImageText = "Latite Client Logo";
+    activity.smallImageKey = "femboy";
+    activity.smallImageText = "Femboy Client Logo";
     return activity;
 }
