@@ -1,4 +1,6 @@
 #pragma once
+#include <algorithm>
+#include <vector>
 #include <unordered_map>
 #include <mc/common/world/Attribute.h>
 #include <optional>
@@ -23,6 +25,20 @@ namespace SDK {
                 if (this->ids[i] == id) return &this->instances[i];
             }
 
+            return nullptr;
+        }
+
+        // Diagnostics / lenient lookup (used by HealthIndicator).
+        // getInstance() above gives up entirely when the two vectors differ in size; these don't.
+        [[nodiscard]] size_t idCount() const { return ids.size(); }
+        [[nodiscard]] size_t instanceCount() const { return instances.size(); }
+        [[nodiscard]] uint32_t idAt(size_t i) const { return i < ids.size() ? ids[i] : 0xFFFFFFFFu; }
+
+        AttributeInstance* getInstanceLenient(unsigned int id) {
+            size_t n = std::min(this->ids.size(), this->instances.size());
+            for (size_t i = 0; i < n; i++) {
+                if (this->ids[i] == id) return &this->instances[i];
+            }
             return nullptr;
         }
     };
