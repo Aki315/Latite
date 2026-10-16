@@ -107,8 +107,8 @@ bool DiscordIpcClient::setActivity(const Activity& activity) {
                                     { "timestamps", { { "start", activity.startTimestamp } } },
                                     { "assets", assets },
                                     { "buttons",
-                                      nlohmann::json::array({ { { "label", "Download Latite Client" },
-                                                                { "url", "https://discord.gg/zcJfXxKTA4" } } }) } };
+                                      nlohmann::json::array({ { { "label", "Download Femboy Client" },
+                                                                { "url", "https://www.youtube.com/watch?v=dQw4w9WgXcQ" } } }) } };
 
     if (!sendSetActivity(activityJson)) {
         scheduleReconnect();
