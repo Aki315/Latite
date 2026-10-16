@@ -1,5 +1,6 @@
-#include "pch.h"
-#include "ModernKeybindHandling.h"
+#include "client/Latite.h"
+#include "client/input/Keyboard.h"
+#include "client/event/events/TickEvent.h"
 
 #include "client/Latite.h"
 #include "client/event/events/TickEvent.h"
