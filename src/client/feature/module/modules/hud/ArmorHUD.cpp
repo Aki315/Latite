@@ -16,6 +16,21 @@ ArmorHUD::ArmorHUD()
     std::get<ColorValue>(txtColor).getMainColor() = { 1.f, 1.f, 1.f, 1.f };
     addSetting("textColor", LocalizeString::get("client.hudmodule.armorHud.textColor.name"),
                LocalizeString::get("client.hudmodule.armorHud.textColor.desc"), txtColor);
+
+    addSetting("dynamicColor", LocalizeString::get("client.hudmodule.armorHud.dynamicColor.name"),
+               LocalizeString::get("client.hudmodule.armorHud.dynamicColor.desc"), dynamicColor, "durability"_istrue);
+    addSliderSetting("yellowThreshold", LocalizeString::get("client.hudmodule.armorHud.yellowThreshold.name"),
+                     LocalizeString::get("client.hudmodule.armorHud.yellowThreshold.desc"), yellowThreshold,
+                     FloatValue(0.f), FloatValue(100.f), FloatValue(1.f), "dynamicColor"_istrue);
+    addSliderSetting("redThreshold", LocalizeString::get("client.hudmodule.armorHud.redThreshold.name"),
+                     LocalizeString::get("client.hudmodule.armorHud.redThreshold.desc"), redThreshold, FloatValue(0.f),
+                     FloatValue(100.f), FloatValue(1.f), "dynamicColor"_istrue);
+    addSetting("greenColor", LocalizeString::get("client.hudmodule.armorHud.greenColor.name"),
+               LocalizeString::get("client.hudmodule.armorHud.greenColor.desc"), greenColor, "dynamicColor"_istrue);
+    addSetting("yellowColor", LocalizeString::get("client.hudmodule.armorHud.yellowColor.name"),
+               LocalizeString::get("client.hudmodule.armorHud.yellowColor.desc"), yellowColor, "dynamicColor"_istrue);
+    addSetting("redColor", LocalizeString::get("client.hudmodule.armorHud.redColor.name"),
+               LocalizeString::get("client.hudmodule.armorHud.redColor.desc"), redColor, "dynamicColor"_istrue);
 }
 
 void ArmorHUD::render(DrawUtil& ctxGeneric, bool isDefault, bool inEditor) {
@@ -121,14 +136,14 @@ void ArmorHUD::render(DrawUtil& ctxGeneric, bool isDefault, bool inEditor) {
                     if (!isLeft) {
                         extra = 6.f;
                         dc.drawText({ rc.right + extra, rc.top, rect.getWidth(), rc.bottom }, txt,
-                                    std::get<ColorValue>(txtColor).getMainColor(),
+                                    durabilityColor(dmg, mdmg),
                                     Renderer::FontSelection::PrimaryRegular, textS, DWRITE_TEXT_ALIGNMENT_LEADING,
                                     DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
                         extra += textSize.x;
                     } else {
                         extra = 6.f;
                         dc.drawText(rc.translate(-rc.getWidth() - extra, 0.f), txt,
-                                    std::get<ColorValue>(txtColor).getMainColor(),
+                                    durabilityColor(dmg, mdmg),
                                     Renderer::FontSelection::PrimaryRegular, textS, DWRITE_TEXT_ALIGNMENT_TRAILING,
                                     DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
                         extra += textSize.x;
@@ -173,4 +188,14 @@ d2d::Rect ArmorHUD::drawItem(MCDrawUtil& dc, Vec2 pos, SDK::ItemStack* stack, fl
                     textSize, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_PARAGRAPH_ALIGNMENT_FAR);
     }
     return rc;
+}
+
+StoredColor ArmorHUD::durabilityColor(int remaining, int max) {
+    if (!std::get<BoolValue>(dynamicColor) || max <= 0) return std::get<ColorValue>(txtColor).getMainColor();
+
+    const float percent = static_cast<float>(remaining) / static_cast<float>(max) * 100.f;
+    if (percent <= std::get<FloatValue>(redThreshold).value) return std::get<ColorValue>(redColor).getMainColor();
+    if (percent <= std::get<FloatValue>(yellowThreshold).value)
+        return std::get<ColorValue>(yellowColor).getMainColor();
+    return std::get<ColorValue>(greenColor).getMainColor();
 }

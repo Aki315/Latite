@@ -8,6 +8,9 @@
 MovableScoreboard::MovableScoreboard()
     : HUDModule("MovableScoreboard", LocalizeString::get("client.module.movableScoreboard.name"),
                 LocalizeString::get("client.module.movableScoreboard.desc"), HUD, 0, false) {
+    addSetting("hideScoreboard", LocalizeString::get("client.module.movableScoreboard.hideScoreboard.name"),
+               LocalizeString::get("client.module.movableScoreboard.hideScoreboard.desc"), hideScoreboard);
+
     listen<RenderLayerEvent>((EventListenerFunc)&MovableScoreboard::onRenderLayer, true,
                              10 /*need to overpower the hud renderer*/);
 }
@@ -34,7 +37,12 @@ void MovableScoreboard::onRenderLayer(Event& evG) {
             float guiScale = SDK::ClientInstance::get()->getGuiData()->guiScale;
 
             if (sidebar) {
-                sidebar->position = { rect.left / guiScale, rect.top / guiScale };
+                if (std::get<BoolValue>(hideScoreboard)) {
+                    // Park the scoreboard far off screen. The module's box stays where it is in the HUD editor.
+                    sidebar->position = { -10000.f, -10000.f };
+                } else {
+                    sidebar->position = { rect.left / guiScale, rect.top / guiScale };
+                }
                 updatePos();
 
                 this->rect.right = rect.left + sidebar->bounds.x * guiScale;

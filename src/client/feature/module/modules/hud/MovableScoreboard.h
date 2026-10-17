@@ -17,4 +17,6 @@ private:
     SDK::UIControl* sidebar;
 
     Vec2 newPos = {};
+
+    ValueType hideScoreboard = BoolValue(false);
 };
