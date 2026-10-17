@@ -28,6 +28,8 @@ private:
     ValueType showLevel = BoolValue(true);
     ValueType showTime = BoolValue(true);
     ValueType showIcons = BoolValue(true);
+    ValueType iconSize = FloatValue(36.f);   // icon width and height, in the same units as the text size
+    ValueType rowSpacing = FloatValue(2.f);  // free space above AND below every effect
     ValueType hideVanilla = BoolValue(true);
     ValueType debug = BoolValue(false);
 

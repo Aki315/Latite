@@ -50,7 +50,7 @@ namespace {
         return line;
     }
 
-    // File name (without extension) of the game's own effect icon, textures/ui/<name>.png, for an effect id.
+    // File name (without extension) of the game's own effect icon, textures/ui/<name>, for an effect id.
     // Returns nullptr when the game has no icon for it (instant effects never stay in the list, and saturation has
     // none), in which case that line just gets an empty icon slot so the text stays aligned.
     const char* iconName(int id) {
@@ -141,6 +141,12 @@ EffectStatus::EffectStatus()
                LocalizeString::get("client.textmodule.effectStatus.showTime.desc"), showTime);
     addSetting("showIcons", LocalizeString::get("client.textmodule.effectStatus.showIcons.name"),
                LocalizeString::get("client.textmodule.effectStatus.showIcons.desc"), showIcons);
+    addSliderSetting("iconSize", LocalizeString::get("client.textmodule.effectStatus.iconSize.name"),
+                     LocalizeString::get("client.textmodule.effectStatus.iconSize.desc"), iconSize, FloatValue(8.f),
+                     FloatValue(128.f), FloatValue(2.f), "showIcons"_istrue);
+    addSliderSetting("rowSpacing", LocalizeString::get("client.textmodule.effectStatus.rowSpacing.name"),
+                     LocalizeString::get("client.textmodule.effectStatus.rowSpacing.desc"), rowSpacing, FloatValue(0.f),
+                     FloatValue(40.f), FloatValue(1.f), "showIcons"_istrue);
     addSetting("hideVanilla", LocalizeString::get("client.textmodule.effectStatus.hideVanilla.name"),
                LocalizeString::get("client.textmodule.effectStatus.hideVanilla.desc"), hideVanilla);
     addSetting("debug", LocalizeString::get("client.textmodule.effectStatus.debug.name"),
@@ -214,12 +220,17 @@ void EffectStatus::renderWithIcons(MCDrawUtil& dc, bool isDefault, bool inEditor
 
     const auto effects = collectEffects(isDefault || inEditor, false, nullptr);
 
-    // Every row is as tall as a line of text, and the icon is a square of that size.
+    // The text is measured; the icon size and the spacing are the user's settings.
+    //   contentH = the tallest thing in a row (the icon or the text)
+    //   rowH     = contentH plus the free space above AND below it, so two effects end up 2 * spacing apart
     const auto font = Renderer::FontSelection::SecondaryLight;
-    const float rowH = std::max(dc.getTextSize(L"Ag", font, textSize, false).y, 8.f);
-    const float iconSize = rowH;
-    const float iconGap = rowH * 0.3f;
-    const float rowGap = rowH * 0.1f;
+    const float textH = std::max(dc.getTextSize(L"Ag", font, textSize, false).y, 8.f);
+    // Clamped to the slider ranges, so a value hand-edited into the config can't blow up the layout.
+    const float icon = std::clamp(static_cast<float>(std::get<FloatValue>(iconSize)), 8.f, 128.f);
+    const float spacing = std::clamp(static_cast<float>(std::get<FloatValue>(rowSpacing)), 0.f, 40.f);
+    const float iconGap = std::max(4.f, icon * 0.25f);
+    const float contentH = std::max(textH, icon);
+    const float rowH = contentH + spacing * 2.f;
 
     std::vector<std::wstring> lines;
     lines.reserve(effects.size());
@@ -231,9 +242,9 @@ void EffectStatus::renderWithIcons(MCDrawUtil& dc, bool isDefault, bool inEditor
 
     const float rowCount = static_cast<float>(std::max<size_t>(lines.size(), 1));
     const float width = fixedSize ? static_cast<float>(std::get<FloatValue>(bgX))
-                                  : iconSize + iconGap + widestText + padXv * 2.f;
+                                  : icon + iconGap + widestText + padXv * 2.f;
     const float height = fixedSize ? static_cast<float>(std::get<FloatValue>(bgY))
-                                   : rowCount * rowH + (rowCount - 1.f) * rowGap + padYv * 2.f;
+                                   : rowCount * rowH + padYv * 2.f;
 
     d2d::Rect rc = d2d::Rect(0.f, 0.f, width, height);
     const float rad = (static_cast<float>(std::get<FloatValue>(radius)) / 10.f) * (rc.getHeight() / 2.f);
@@ -242,23 +253,26 @@ void EffectStatus::renderWithIcons(MCDrawUtil& dc, bool isDefault, bool inEditor
         if (outline) dc.drawRoundedRectangle(rc, outlineCol, rad, std::get<FloatValue>(outlineThickness));
         if (fill) dc.fillRoundedRectangle(rc, bgCol, rad);
 
-        float y = padYv;
         for (size_t i = 0; i < lines.size(); ++i) {
+            const float rowTop = padYv + static_cast<float>(i) * rowH;
+            const float contentTop = rowTop + spacing; // free space above the effect
+
             if (const char* name = iconName(effects[i].id)) {
+                // Same form the game's own UI uses for these icons ("textures/ui/speed_effect"), looked up through the
+                // resource pack stack, so a resource pack that replaces the effect icons is picked up too.
                 SDK::TexturePtr tex {};
                 dc.renderCtx->getTexture(
-                    &tex,
-                    SDK::ResourceLocation(std::string("/resource_packs/vanilla/textures/ui/") + name,
-                                          SDK::ResourceFileSystem::AppPackage),
+                    &tex, SDK::ResourceLocation(std::string("textures/ui/") + name, SDK::ResourceFileSystem::UserPackage),
                     false);
-                // textureData stays empty when the game could not load the texture.
-                if (tex.textureData) dc.drawImage(tex, { padXv, y }, { iconSize, iconSize }, d2d::Colors::WHITE);
+                if (tex.textureData) {
+                    const float iconTop = contentTop + (contentH - icon) / 2.f;
+                    dc.drawImage(tex, { padXv, iconTop }, { icon, icon }, d2d::Colors::WHITE);
+                }
             }
 
-            d2d::Rect textRc = d2d::Rect(padXv + iconSize + iconGap, y, width - padXv, y + rowH);
+            d2d::Rect textRc = d2d::Rect(padXv + icon + iconGap, contentTop, width - padXv, contentTop + contentH);
             dc.drawText(textRc, lines[i], textCol, font, textSize, DWRITE_TEXT_ALIGNMENT_LEADING,
                         DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-            y += rowH + rowGap;
         }
     }
 
