@@ -12,6 +12,14 @@ namespace {
     constexpr int kHeartsPerRow = 10;
     constexpr int kMaxHeartsShown = 20;
 
+    // Vanilla-style heart, drawn from rectangles (no font glyph, no image file).
+    // O = outline, R = body, W = shine, . = empty.
+    constexpr int kHeartCols = 9;
+    constexpr int kHeartRows = 8;
+    constexpr const char* kHeart[kHeartRows] = {
+        ".OOO.OOO.", "OWRRORRRO", "OWRRRRRRO", "ORRRRRRRO", ".ORRRRRO.", "..ORRRO..", "...ORO...", "....O....",
+    };
+
     // 7.0 -> "7", 7.5 -> "7.5" (health is tracked in half-heart steps)
     std::wstring formatHalf(float v) {
         float rounded = std::round(v * 2.f) / 2.f;
@@ -252,21 +260,28 @@ void HealthIndicator::drawHearts(D2DUtil& dc, Vec2 const& anchor, float scale, f
     const int fullHearts = halfPoints / 2;
     const bool hasHalf = (halfPoints % 2) != 0;
 
+    // One heart pixel is a whole number of screen pixels, so the rectangles line up without seams and the
+    // hearts stay crisp. Neighbouring hearts share their outline column, like the vanilla health bar.
     const float size = std::get<FloatValue>(textSize) * scale;
-    const float cell = size * 0.9f;
-    const float pad = size * 0.15f;
+    const float px = std::max(1.f, std::round(size * 0.9f / kHeartCols));
+    const float heartH = kHeartRows * px;
+    const float pitchX = (kHeartCols - 1) * px;
+    const float pitchY = (kHeartRows + 1) * px;
+    const float pad = std::max(2.f, std::round(px * 1.5f));
     const int rows = (totalHearts + kHeartsPerRow - 1) / kHeartsPerRow;
     const int widest = std::min(totalHearts, kHeartsPerRow);
 
     if (std::get<BoolValue>(showBackground)) {
-        d2d::Rect bg { anchor.x - cell * widest * 0.5f - pad, anchor.y - cell * rows - pad * 2.f,
-                       anchor.x + cell * widest * 0.5f + pad, anchor.y };
+        const float totalW = pitchX * widest + px;
+        d2d::Rect bg { std::round(anchor.x - totalW * 0.5f) - pad, std::round(anchor.y - pitchY * rows - pad * 2.f),
+                       std::round(anchor.x - totalW * 0.5f) + totalW + pad, anchor.y };
         dc.fillRoundedRectangle(bg, d2d::Color(0.f, 0.f, 0.f, 0.45f), size * 0.25f);
     }
 
+    const d2d::Color outline = d2d::Color::RGB(25, 8, 10);
     const d2d::Color filled = d2d::Color::RGB(226, 55, 65);
-    const d2d::Color empty = d2d::Color::RGB(70, 70, 70, 210);
-    const std::wstring glyph = L"♥";
+    const d2d::Color shine = d2d::Color::RGB(255, 170, 175);
+    const d2d::Color empty = d2d::Color::RGB(70, 70, 70);
 
     for (int i = 0; i < totalHearts; ++i) {
         const int row = i / kHeartsPerRow;
@@ -274,23 +289,34 @@ void HealthIndicator::drawHearts(D2DUtil& dc, Vec2 const& anchor, float scale, f
         const int inRow = std::min(kHeartsPerRow, totalHearts - row * kHeartsPerRow);
 
         // Row 0 sits closest to the head; extra rows stack upward.
-        float left = anchor.x - cell * inRow * 0.5f + cell * col;
-        float bottom = anchor.y - pad - cell * row;
-        d2d::Rect cellRect { left, bottom - cell, left + cell, bottom };
+        const float left = std::round(anchor.x - (pitchX * inRow + px) * 0.5f + pitchX * col);
+        const float bottom = std::round(anchor.y - pad - pitchY * row);
+        const float top = bottom - heartH;
 
         const bool isFull = i < fullHearts;
         const bool isHalf = hasHalf && i == fullHearts;
+        // A half heart is red on its left side only.
+        auto litAt = [&](int c) { return isFull || (isHalf && c < kHeartCols / 2); };
 
-        dc.drawText(cellRect, glyph, isFull ? filled : empty, kFont, size, DWRITE_TEXT_ALIGNMENT_CENTER,
-                    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false);
+        for (int r = 0; r < kHeartRows; ++r) {
+            int c = 0;
+            while (c < kHeartCols) {
+                const char ch = kHeart[r][c];
+                if (ch == '.') {
+                    ++c;
+                    continue;
+                }
 
-        if (isHalf) {
-            // Left half of the heart in red on top of the empty heart.
-            d2d::Rect halfClip { cellRect.left, cellRect.top, cellRect.left + cell * 0.5f, cellRect.bottom };
-            dc.ctx->PushAxisAlignedClip(halfClip.get(), D2D1_ANTIALIAS_MODE_ALIASED);
-            dc.drawText(cellRect, glyph, filled, kFont, size, DWRITE_TEXT_ALIGNMENT_CENTER,
-                        DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false);
-            dc.ctx->PopAxisAlignedClip();
+                // Merge neighbouring pixels of the same kind into one rectangle.
+                const bool lit = litAt(c);
+                int end = c + 1;
+                while (end < kHeartCols && kHeart[r][end] == ch && litAt(end) == lit) ++end;
+
+                const d2d::Color color = ch == 'O' ? outline : (ch == 'R' ? (lit ? filled : empty) : (lit ? shine : empty));
+                d2d::Rect rc { left + c * px, top + r * px, left + end * px, top + (r + 1) * px };
+                dc.fillRectangle(rc, color);
+                c = end;
+            }
         }
     }
 }
