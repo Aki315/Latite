@@ -752,6 +752,8 @@
         "client.module.healthIndicator.showBackground.desc": "Draw a translucent background behind the indicator.",
         "client.module.healthIndicator.playersOnly.name": "Players Only",
         "client.module.healthIndicator.playersOnly.desc": "Only show health for players, not mobs.",
+        "client.module.healthIndicator.showAbsorption.name": "Show Golden Hearts",
+        "client.module.healthIndicator.showAbsorption.desc": "Also shows golden (absorption) hearts, like from golden apples. Hearts style adds gold hearts above the red ones, number style adds +N.",
         "client.module.healthIndicator.debug.name": "Debug",
         "client.module.healthIndicator.debug.desc": "Labels every nearby entity with its type and the health the client can see, to find out why an entity has no indicator.",
         "client.module.healthIndicator.debugAttributes.name": "Debug: Attributes",
