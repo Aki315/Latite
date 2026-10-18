@@ -57,6 +57,7 @@
 #include "modules/hud/CustomCoordinates.h"
 #include "modules/hud/MovableCoordinates.h"
 #include "modules/hud/FrameTimeDisplay.h"
+#include "modules/hud/TargetHUD.h"
 #include "modules/hud/WAILA.h"
 #include "modules/hud/DirectionHud.h"
 
@@ -110,6 +111,7 @@ ModuleManager::ModuleManager() {
     this->items.push_back(std::make_shared<CustomCoordinates>());
     this->items.push_back(std::make_shared<MovableCoordinates>());
     this->items.push_back(std::make_shared<WAILA>());
+    this->items.push_back(std::make_shared<TargetHUD>());
     this->items.push_back(std::make_shared<DirectionHud>());
     this->items.push_back(std::make_shared<AutoGG>());
     this->items.push_back(std::make_shared<HiveTranslate>());
