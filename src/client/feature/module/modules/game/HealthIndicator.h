@@ -39,6 +39,7 @@ private:
     ValueType showBackground = BoolValue(true);
     ValueType playersOnly = BoolValue(true);
     ValueType showAbsorption = BoolValue(true);
+    ValueType zoomFix = BoolValue(true);
     ValueType debug = BoolValue(false);
     ValueType debugAttributes = BoolValue(false);
     ValueType maxDistance = FloatValue(32.f);

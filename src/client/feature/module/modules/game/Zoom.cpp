@@ -2,6 +2,7 @@
 #include "Zoom.h"
 #include "client/Latite.h"
 #include "client/render/Renderer.h"
+#include "util/ZoomState.h"
 
 Zoom::Zoom()
     : Module("Zoom", LocalizeString::get("client.module.zoom.name"), LocalizeString::get("client.module.zoom.desc"),
@@ -50,6 +51,7 @@ void Zoom::onRenderLevel(Event& evGeneric) {
     if (std::get<BoolValue>(hasAnim))
         lr = std::lerp(activeModifier, modifyTo, alpha * std::get<FloatValue>(animSpeed) / 10.f);
     activeModifier = lr;
+    ZoomState::factor = activeModifier;
 
     float& fx = ev.getLevelRenderer()->getLevelRendererPlayer()->getFovX();
     float& fy = ev.getLevelRenderer()->getLevelRendererPlayer()->getFovY();
@@ -106,4 +108,13 @@ void Zoom::onSensitivity(Event& evG) {
     if (shouldZoom && std::get<BoolValue>(this->dpiAdjust)) {
         ev.getValue() = std::min(ev.getValue(), ev.getValue() * (2 / std::get<FloatValue>(modifier)));
     }
+}
+
+void Zoom::onDisable() {
+    // Don't leave a stale zoom behind for the markers that follow it.
+    shouldZoom = false;
+    zoomKeyDown = false;
+    activeModifier = 1.f;
+    modifyTo = 1.f;
+    ZoomState::factor = 1.f;
 }

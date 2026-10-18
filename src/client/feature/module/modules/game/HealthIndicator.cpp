@@ -110,6 +110,8 @@ HealthIndicator::HealthIndicator()
                LocalizeString::get("client.module.healthIndicator.playersOnly.desc"), playersOnly);
     addSetting("showAbsorption", LocalizeString::get("client.module.healthIndicator.showAbsorption.name"),
                LocalizeString::get("client.module.healthIndicator.showAbsorption.desc"), showAbsorption);
+    addSetting("zoomFix", LocalizeString::get("client.module.healthIndicator.zoomFix.name"),
+               LocalizeString::get("client.module.healthIndicator.zoomFix.desc"), zoomFix);
     addSetting("debug", LocalizeString::get("client.module.healthIndicator.debug.name"),
                LocalizeString::get("client.module.healthIndicator.debug.desc"), debug);
     addSetting("debugAttributes", LocalizeString::get("client.module.healthIndicator.debugAttributes.name"),
@@ -240,7 +242,7 @@ void HealthIndicator::onRenderOverlay(Event&) {
         float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
         if (distance > maxDist) continue;
 
-        auto screen = WorldToScreen::convert(head);
+        auto screen = WorldToScreen::convert(head, std::get<BoolValue>(zoomFix));
         if (!screen.has_value()) continue;
 
         targets.push_back({ *screen, distance, healthValue, maxHealth, absorption, std::move(label) });

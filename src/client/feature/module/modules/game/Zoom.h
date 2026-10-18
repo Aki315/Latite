@@ -10,6 +10,8 @@ public:
     Zoom();
     ~Zoom() = default;
 
+    void onDisable() override;
+
 private:
     enum class ActivationMode {
         HoldToEnable,
