@@ -31,5 +31,8 @@ namespace SDK {
         inline static Attribute Hunger = Attribute(2, "minecraft:player.hunger");
         inline static Attribute Saturation = Attribute(3, "minecraft:player.saturation");
         inline static Attribute Health = Attribute(7, "minecraft:health");
+        // Golden hearts. Id 14 was found with the Health Indicator's "Debug: Attributes": it reads 4 after a golden
+        // apple and 16 after an enchanted one (max 16). Like the other ids it can change with a game update.
+        inline static Attribute Absorption = Attribute(14, "minecraft:absorption");
     };
 }
