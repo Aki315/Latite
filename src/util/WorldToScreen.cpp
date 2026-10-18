@@ -1,11 +1,12 @@
 #pragma once
 #include "WorldToScreen.h"
+#include "ZoomState.h"
 #include "mc/common/client/game/ClientInstance.h"
 #include "mc/common/client/gui/GuiData.h"
 #include <glm/glm.hpp>
 
 namespace WorldToScreen {
-    std::optional<Vec2> convert(const Vec3& worldPos) {
+    std::optional<Vec2> convert(const Vec3& worldPos, bool applyZoom) {
         SDK::ClientInstance* clientInstance = SDK::ClientInstance::get();
         if (!clientInstance) return std::nullopt;
 
@@ -37,6 +38,12 @@ namespace WorldToScreen {
         glm::vec2 ndc;
         ndc.x = clipCoords.x / clipCoords.w;
         ndc.y = clipCoords.y / clipCoords.w;
+
+        // Zoom scales the picture around the screen center.
+        if (applyZoom) {
+            ndc.x *= ZoomState::factor;
+            ndc.y *= ZoomState::factor;
+        }
 
         Vec2 screenPos;
         screenPos.x = (ndc.x + 1.0f) * 0.5f * screenSize.x;
