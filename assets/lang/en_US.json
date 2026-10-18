@@ -754,6 +754,8 @@
         "client.module.healthIndicator.playersOnly.desc": "Only show health for players, not mobs.",
         "client.module.healthIndicator.debug.name": "Debug",
         "client.module.healthIndicator.debug.desc": "Labels every nearby entity with its type and the health the client can see, to find out why an entity has no indicator.",
+        "client.module.healthIndicator.debugAttributes.name": "Debug: Attributes",
+        "client.module.healthIndicator.debugAttributes.desc": "Lists every attribute value for yourself (top left) and for nearby players. Used to find the absorption (golden hearts) number: eat a golden apple and see which value appears or changes.",
         "client.module.healthIndicator.textSize.name": "Size",
         "client.module.healthIndicator.textSize.desc": "Size of the indicator.",
         "client.module.healthIndicator.maxDistance.name": "Max Distance",
