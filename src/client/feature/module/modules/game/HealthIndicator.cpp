@@ -36,6 +36,23 @@ namespace {
         return d2d::Color(r, g, 0.f, 1.f);
     }
 
+    // Lists every attribute of a player as "id:value/max", a few per line. Used to find an attribute's id by
+    // watching which number changes (for example the absorption hearts after eating a golden apple).
+    std::wstring describeAttributes(SDK::AttributesComponent* attrs, size_t perLine) {
+        auto& map = attrs->baseAttributes;
+        std::wstring out;
+        for (size_t i = 0; i < map.idCount(); ++i) {
+            const unsigned int id = map.idAt(i);
+            if (i) out += (i % perLine == 0) ? L"\n" : L"  ";
+            if (auto* inst = map.getInstanceByStride(id)) {
+                out += std::format(L"{}:{:.1f}/{:.0f}", id, inst->value, inst->maxValue);
+            } else {
+                out += std::format(L"{}:?", id);
+            }
+        }
+        return out;
+    }
+
     struct Target {
         Vec2 screen;
         float distance;
@@ -77,6 +94,8 @@ HealthIndicator::HealthIndicator()
                LocalizeString::get("client.module.healthIndicator.playersOnly.desc"), playersOnly);
     addSetting("debug", LocalizeString::get("client.module.healthIndicator.debug.name"),
                LocalizeString::get("client.module.healthIndicator.debug.desc"), debug);
+    addSetting("debugAttributes", LocalizeString::get("client.module.healthIndicator.debugAttributes.name"),
+               LocalizeString::get("client.module.healthIndicator.debugAttributes.desc"), debugAttributes);
     addSliderSetting("textSize",LocalizeString::get("client.module.healthIndicator.textSize.name"),
                      LocalizeString::get("client.module.healthIndicator.textSize.desc"), textSize, FloatValue(16.f),
                      FloatValue(48.f), FloatValue(1.f));
@@ -110,6 +129,15 @@ void HealthIndicator::onRenderOverlay(Event&) {
     std::vector<Target> targets;
 
     const bool debugMode = std::get<BoolValue>(debug);
+    const bool attributeDebug = std::get<BoolValue>(debugAttributes);
+
+    // Your own attributes, shown top left, so you can eat a golden apple and watch which number changes.
+    std::wstring selfInfo;
+    if (attributeDebug) {
+        if (auto* selfAttrs = lp->tryGetComponent<SDK::AttributesComponent>()) {
+            selfInfo = L"YOU\n" + describeAttributes(selfAttrs, 5);
+        }
+    }
 
     for (auto* actor : level->getRuntimeActorList()) {
         if (!actor || actor == lp) continue;
@@ -166,8 +194,12 @@ void HealthIndicator::onRenderOverlay(Event&) {
             }
         }
 
+        if (attributeDebug && attrs && actor->isPlayer()) {
+            label = describeAttributes(attrs, 5);
+        }
+
         if (!inst || !(inst->value > 0.f)) {
-            if (!debugMode) continue;
+            if (!debugMode && !attributeDebug) continue;
         }
 
         float healthValue = inst ? inst->value : 0.f;
@@ -195,7 +227,7 @@ void HealthIndicator::onRenderOverlay(Event&) {
         targets.push_back({ *screen, distance, healthValue, maxHealth, std::move(label) });
     }
 
-    if (targets.empty()) return;
+    if (targets.empty() && selfInfo.empty()) return;
 
     // Far to near so closer players are drawn on top.
     std::sort(targets.begin(), targets.end(), [](Target const& a, Target const& b) {
@@ -217,6 +249,10 @@ void HealthIndicator::onRenderOverlay(Event&) {
             // Also the fallback when a player has too many hearts to fit a readable row.
             drawNumber(dc, t.screen, scale, t.health, t.maxHealth);
         }
+    }
+
+    if (!selfInfo.empty()) {
+        drawLabel(dc, Vec2 { 320.f, 260.f }, 0.55f, selfInfo, d2d::Colors::YELLOW);
     }
 }
 

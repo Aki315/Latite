@@ -39,6 +39,7 @@ private:
     ValueType showBackground = BoolValue(true);
     ValueType playersOnly = BoolValue(true);
     ValueType debug = BoolValue(false);
+    ValueType debugAttributes = BoolValue(false);
     ValueType maxDistance = FloatValue(32.f);
     ValueType heightOffset = FloatValue(0.75f);
 };
