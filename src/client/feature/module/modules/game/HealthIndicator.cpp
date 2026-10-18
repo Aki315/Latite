@@ -53,11 +53,27 @@ namespace {
         return out;
     }
 
+    // Golden hearts (the absorption attribute). Only the lookups that read the right entry are used, so a failed
+    // lookup shows no golden hearts instead of a wrong number.
+    float readAbsorption(SDK::AttributesComponent* attrs) {
+        auto& map = attrs->baseAttributes;
+        const int id = SDK::Attributes::Absorption.mIDValue;
+        SDK::AttributeInstance* inst = map.getInstance(id);
+        if (!inst) inst = map.getInstanceByStride(id);
+        if (!inst) return 0.f;
+        if (!(inst->maxValue > 0.f && inst->maxValue <= 2048.f && inst->value >= 0.f &&
+              inst->value <= inst->maxValue + 1024.f)) {
+            return 0.f;
+        }
+        return inst->value;
+    }
+
     struct Target {
         Vec2 screen;
         float distance;
         float health;
         float maxHealth;
+        float absorption;
         std::wstring label; // only set in debug mode
     };
 }
@@ -92,6 +108,8 @@ HealthIndicator::HealthIndicator()
                LocalizeString::get("client.module.healthIndicator.showBackground.desc"), showBackground);
     addSetting("playersOnly", LocalizeString::get("client.module.healthIndicator.playersOnly.name"),
                LocalizeString::get("client.module.healthIndicator.playersOnly.desc"), playersOnly);
+    addSetting("showAbsorption", LocalizeString::get("client.module.healthIndicator.showAbsorption.name"),
+               LocalizeString::get("client.module.healthIndicator.showAbsorption.desc"), showAbsorption);
     addSetting("debug", LocalizeString::get("client.module.healthIndicator.debug.name"),
                LocalizeString::get("client.module.healthIndicator.debug.desc"), debug);
     addSetting("debugAttributes", LocalizeString::get("client.module.healthIndicator.debugAttributes.name"),
@@ -205,6 +223,7 @@ void HealthIndicator::onRenderOverlay(Event&) {
         float healthValue = inst ? inst->value : 0.f;
         float maxHealth = inst ? inst->maxValue : 20.f;
         if (!(maxHealth > 0.f)) maxHealth = 20.f;
+        const float absorption = (attrs && std::get<BoolValue>(showAbsorption)) ? readAbsorption(attrs) : 0.f;
 
         Vec3 cur = actor->getPos();
         Vec3 old = actor->getPosOld();
@@ -224,7 +243,7 @@ void HealthIndicator::onRenderOverlay(Event&) {
         auto screen = WorldToScreen::convert(head);
         if (!screen.has_value()) continue;
 
-        targets.push_back({ *screen, distance, healthValue, maxHealth, std::move(label) });
+        targets.push_back({ *screen, distance, healthValue, maxHealth, absorption, std::move(label) });
     }
 
     if (targets.empty() && selfInfo.empty()) return;
@@ -244,10 +263,10 @@ void HealthIndicator::onRenderOverlay(Event&) {
         if (!t.label.empty()) {
             drawLabel(dc, t.screen, scale, t.label, d2d::Colors::YELLOW);
         } else if (hearts && std::ceil(t.maxHealth / 2.f) <= kMaxHeartsShown) {
-            drawHearts(dc, t.screen, scale, t.health, t.maxHealth);
+            drawHearts(dc, t.screen, scale, t.health, t.maxHealth, t.absorption);
         } else {
             // Also the fallback when a player has too many hearts to fit a readable row.
-            drawNumber(dc, t.screen, scale, t.health, t.maxHealth);
+            drawNumber(dc, t.screen, scale, t.health, t.maxHealth, t.absorption);
         }
     }
 
@@ -256,13 +275,21 @@ void HealthIndicator::onRenderOverlay(Event&) {
     }
 }
 
-void HealthIndicator::drawNumber(D2DUtil& dc, Vec2 const& anchor, float scale, float health, float maxHealth) {
+void HealthIndicator::drawNumber(D2DUtil& dc, Vec2 const& anchor, float scale, float health, float maxHealth,
+                                 float absorption) {
     std::wstring text;
     if (numberFormat.getSelectedKey() == FormatHearts) {
         text = formatHalf(health / 2.f) + L"/" + formatHalf(maxHealth / 2.f); // 10/10
     } else {
         text = std::to_wstring(static_cast<int>(std::ceil(health))) + L"/" +
                std::to_wstring(static_cast<int>(std::ceil(maxHealth))); // 20/20
+    }
+
+    // Golden hearts are added on the end: "10/10 +4" in hearts, or "20/20 +8" in points.
+    if (absorption >= 0.5f) {
+        text += L" +";
+        text += numberFormat.getSelectedKey() == FormatHearts ? formatHalf(absorption / 2.f)
+                                                              : std::to_wstring(static_cast<int>(std::ceil(absorption)));
     }
 
     d2d::Color color = std::get<BoolValue>(colorByHealth)
@@ -290,11 +317,18 @@ void HealthIndicator::drawLabel(D2DUtil& dc, Vec2 const& anchor, float scale, st
                 false);
 }
 
-void HealthIndicator::drawHearts(D2DUtil& dc, Vec2 const& anchor, float scale, float health, float maxHealth) {
+void HealthIndicator::drawHearts(D2DUtil& dc, Vec2 const& anchor, float scale, float health, float maxHealth,
+                                 float absorption) {
     const int totalHearts = std::max(1, static_cast<int>(std::ceil(maxHealth / 2.f)));
     const int halfPoints = std::clamp(static_cast<int>(std::ceil(health)), 0, totalHearts * 2);
     const int fullHearts = halfPoints / 2;
     const bool hasHalf = (halfPoints % 2) != 0;
+
+    // Golden hearts: 2 points each, drawn as extra rows above the red hearts.
+    const int absPoints = std::clamp(static_cast<int>(std::ceil(absorption)), 0, kMaxHeartsShown * 2);
+    const int absHearts = (absPoints + 1) / 2;
+    const int absFull = absPoints / 2;
+    const bool absHalf = (absPoints % 2) != 0;
 
     // One heart pixel is a whole number of screen pixels, so the rectangles line up without seams and the
     // hearts stay crisp. Neighbouring hearts share their outline column, like the vanilla health bar.
@@ -304,8 +338,10 @@ void HealthIndicator::drawHearts(D2DUtil& dc, Vec2 const& anchor, float scale, f
     const float pitchX = (kHeartCols - 1) * px;
     const float pitchY = (kHeartRows + 1) * px;
     const float pad = std::max(2.f, std::round(px * 1.5f));
-    const int rows = (totalHearts + kHeartsPerRow - 1) / kHeartsPerRow;
-    const int widest = std::min(totalHearts, kHeartsPerRow);
+    const int healthRows = (totalHearts + kHeartsPerRow - 1) / kHeartsPerRow;
+    const int absRows = (absHearts + kHeartsPerRow - 1) / kHeartsPerRow;
+    const int rows = healthRows + absRows;
+    const int widest = std::min(std::max(totalHearts, absHearts), kHeartsPerRow);
 
     if (std::get<BoolValue>(showBackground)) {
         const float totalW = pitchX * widest + px;
@@ -314,24 +350,22 @@ void HealthIndicator::drawHearts(D2DUtil& dc, Vec2 const& anchor, float scale, f
         dc.fillRoundedRectangle(bg, d2d::Color(0.f, 0.f, 0.f, 0.45f), size * 0.25f);
     }
 
+    struct Palette {
+        d2d::Color filled;
+        d2d::Color shine;
+    };
     const d2d::Color outline = d2d::Color::RGB(25, 8, 10);
-    const d2d::Color filled = d2d::Color::RGB(226, 55, 65);
-    const d2d::Color shine = d2d::Color::RGB(255, 170, 175);
     const d2d::Color empty = d2d::Color::RGB(70, 70, 70);
+    const Palette red { d2d::Color::RGB(226, 55, 65), d2d::Color::RGB(255, 170, 175) };
+    const Palette gold { d2d::Color::RGB(247, 190, 25), d2d::Color::RGB(255, 240, 160) };
 
-    for (int i = 0; i < totalHearts; ++i) {
-        const int row = i / kHeartsPerRow;
-        const int col = i % kHeartsPerRow;
-        const int inRow = std::min(kHeartsPerRow, totalHearts - row * kHeartsPerRow);
-
+    auto drawHeart = [&](int row, int col, int inRow, bool isFull, bool isHalf, Palette const& palette) {
         // Row 0 sits closest to the head; extra rows stack upward.
         const float left = std::round(anchor.x - (pitchX * inRow + px) * 0.5f + pitchX * col);
         const float bottom = std::round(anchor.y - pad - pitchY * row);
         const float top = bottom - heartH;
 
-        const bool isFull = i < fullHearts;
-        const bool isHalf = hasHalf && i == fullHearts;
-        // A half heart is red on its left side only.
+        // A half heart is coloured on its left side only.
         auto litAt = [&](int c) { return isFull || (isHalf && c < kHeartCols / 2); };
 
         for (int r = 0; r < kHeartRows; ++r) {
@@ -348,11 +382,24 @@ void HealthIndicator::drawHearts(D2DUtil& dc, Vec2 const& anchor, float scale, f
                 int end = c + 1;
                 while (end < kHeartCols && kHeart[r][end] == ch && litAt(end) == lit) ++end;
 
-                const d2d::Color color = ch == 'O' ? outline : (ch == 'R' ? (lit ? filled : empty) : (lit ? shine : empty));
+                const d2d::Color color =
+                    ch == 'O' ? outline : (ch == 'R' ? (lit ? palette.filled : empty) : (lit ? palette.shine : empty));
                 d2d::Rect rc { left + c * px, top + r * px, left + end * px, top + (r + 1) * px };
                 dc.fillRectangle(rc, color);
                 c = end;
             }
         }
+    };
+
+    for (int i = 0; i < totalHearts; ++i) {
+        const int row = i / kHeartsPerRow;
+        const int inRow = std::min(kHeartsPerRow, totalHearts - row * kHeartsPerRow);
+        drawHeart(row, i % kHeartsPerRow, inRow, i < fullHearts, hasHalf && i == fullHearts, red);
+    }
+
+    for (int i = 0; i < absHearts; ++i) {
+        const int row = i / kHeartsPerRow;
+        const int inRow = std::min(kHeartsPerRow, absHearts - row * kHeartsPerRow);
+        drawHeart(healthRows + row, i % kHeartsPerRow, inRow, i < absFull, absHalf && i == absFull, gold);
     }
 }

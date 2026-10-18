@@ -26,8 +26,8 @@ private:
 
     void onRenderOverlay(Event& ev);
 
-    void drawNumber(D2DUtil& dc, Vec2 const& anchor, float scale, float health, float maxHealth);
-    void drawHearts(D2DUtil& dc, Vec2 const& anchor, float scale, float health, float maxHealth);
+    void drawNumber(D2DUtil& dc, Vec2 const& anchor, float scale, float health, float maxHealth, float absorption);
+    void drawHearts(D2DUtil& dc, Vec2 const& anchor, float scale, float health, float maxHealth, float absorption);
     void drawLabel(D2DUtil& dc, Vec2 const& anchor, float scale, std::wstring const& text, d2d::Color const& color);
 
     EnumData style;
@@ -38,6 +38,7 @@ private:
     ValueType colorByHealth = BoolValue(true);
     ValueType showBackground = BoolValue(true);
     ValueType playersOnly = BoolValue(true);
+    ValueType showAbsorption = BoolValue(true);
     ValueType debug = BoolValue(false);
     ValueType debugAttributes = BoolValue(false);
     ValueType maxDistance = FloatValue(32.f);
