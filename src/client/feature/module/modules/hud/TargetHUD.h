@@ -19,8 +19,9 @@ public:
     void onAttack(Event& ev);
 
 private:
-    static constexpr int StyleHearts = 0;
-    static constexpr int StyleNumber = 1;
+    static constexpr int StyleBar = 0;
+    static constexpr int StyleHearts = 1;
+    static constexpr int StyleNumber = 2;
 
     struct Info {
         std::wstring name;
@@ -38,10 +39,11 @@ private:
     ValueType showArmor = BoolValue(true);
     ValueType showOffhand = BoolValue(true);
     ValueType showAbsorption = BoolValue(true);
-    ValueType textSize = FloatValue(28.f);
+    ValueType textSize = FloatValue(22.f);
     ValueType textColor = ColorValue(1.f, 1.f, 1.f, 1.f);
-    ValueType backgroundColor = ColorValue(0.f, 0.f, 0.f, 0.6f);
-    ValueType accentColor = ColorValue(0.35f, 0.35f, 1.f, 1.f);
+    ValueType healthColor = ColorValue(0.9f, 0.12f, 0.2f, 1.f);
+    ValueType backgroundColor = ColorValue(0.055f, 0.075f, 0.125f, 0.92f);
+    ValueType accentColor = ColorValue(0.12f, 0.56f, 1.f, 1.f);
 
     // The player you last hit. Only the runtime id is kept, the actor is looked up again every frame.
     uint64_t targetId = 0;

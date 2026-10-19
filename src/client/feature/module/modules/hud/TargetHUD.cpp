@@ -15,15 +15,23 @@
 
 namespace {
     // Layout, in the same units the other HUD modules use (a drawn item is 48 wide at scale 1).
-    constexpr float kPadding = 12.f;
-    constexpr float kHeadSize = 54.f;
-    constexpr float kHeadGap = 9.f;
-    constexpr float kLineGap = 4.f;
-    constexpr float kIconSize = 30.f;
-    constexpr float kIconSpacing = 4.f;
-    constexpr float kOffhandGap = 10.f;
-    constexpr float kMinWidth = 200.f;
-    constexpr float kAccentWidth = 3.f;
+    constexpr float kOuterPad = 8.f;
+    constexpr float kHeadBox = 54.f;     // The framed square around the head.
+    constexpr float kHeadInset = 4.f;    // Space between that frame and the head image.
+    constexpr float kDividerGap = 7.f;   // Space on each side of the thin divider lines.
+    constexpr float kLine = 2.f;         // Thickness of frames and divider lines.
+    constexpr float kRowGap = 5.f;
+    constexpr float kSlotBox = 32.f;     // An armor / offhand slot.
+    constexpr float kSlotIcon = 26.f;    // The item drawn inside a slot.
+    constexpr float kSlotSpacing = 4.f;
+    constexpr float kOffhandGap = 8.f;
+    constexpr float kBarHeight = 16.f;
+    constexpr float kBarMinWidth = 150.f;
+    constexpr float kBarGap = 1.f;       // Space between bar segments.
+    constexpr float kNumberGap = 8.f;    // Space between the bar and the health number.
+    constexpr int kMaxSegments = 20;
+    constexpr float kMinWidth = 260.f;
+    constexpr float kChamfer = 3.f;
 
     // Vanilla-style heart, drawn from rectangles. O = outline, R = body, W = shine, . = empty.
     constexpr int kHeartCols = 9;
@@ -72,6 +80,16 @@ namespace {
         return vitals;
     }
 
+    d2d::Color withAlpha(d2d::Color const& c, float factor) { return d2d::Color(c.r, c.g, c.b, c.a * factor); }
+
+    // A rectangle outline of thickness t, drawn inside r.
+    void fillFrame(DrawUtil& dc, d2d::Rect const& r, float t, d2d::Color const& color) {
+        dc.fillRectangle({ r.left, r.top, r.right, r.top + t }, color);
+        dc.fillRectangle({ r.left, r.bottom - t, r.right, r.bottom }, color);
+        dc.fillRectangle({ r.left, r.top + t, r.left + t, r.bottom - t }, color);
+        dc.fillRectangle({ r.right - t, r.top + t, r.right, r.bottom - t }, color);
+    }
+
     int heartCount(float points) { return std::max(0, static_cast<int>(std::ceil(points / 2.f))); }
     int rowsFor(int hearts) { return (hearts + kHeartsPerRow - 1) / kHeartsPerRow; }
 } // namespace
@@ -81,6 +99,8 @@ TargetHUD::TargetHUD()
                 LocalizeString::get("client.hudmodule.targetHud.desc"), HUD) {
     showPreview = false;
 
+    style.addEntry(EnumEntry(StyleBar, LocalizeString::get("client.hudmodule.targetHud.style.bar.name"),
+                             LocalizeString::get("client.hudmodule.targetHud.style.bar.desc")));
     style.addEntry(EnumEntry(StyleHearts, LocalizeString::get("client.hudmodule.targetHud.style.hearts.name"),
                              LocalizeString::get("client.hudmodule.targetHud.style.hearts.desc")));
     style.addEntry(EnumEntry(StyleNumber, LocalizeString::get("client.hudmodule.targetHud.style.number.name"),
@@ -104,12 +124,14 @@ TargetHUD::TargetHUD()
                      FloatValue(44.f), FloatValue(1.f));
     addSetting("textColor", LocalizeString::get("client.hudmodule.targetHud.textColor.name"),
                LocalizeString::get("client.hudmodule.targetHud.textColor.desc"), textColor);
+    addSetting("healthColor", LocalizeString::get("client.hudmodule.targetHud.healthColor.name"),
+               LocalizeString::get("client.hudmodule.targetHud.healthColor.desc"), healthColor);
     addSetting("backgroundColor", LocalizeString::get("client.hudmodule.targetHud.backgroundColor.name"),
                LocalizeString::get("client.hudmodule.targetHud.backgroundColor.desc"), backgroundColor);
     addSetting("accentColor", LocalizeString::get("client.hudmodule.targetHud.accentColor.name"),
                LocalizeString::get("client.hudmodule.targetHud.accentColor.desc"), accentColor);
 
-    rect = { 0.f, 0.f, kMinWidth, 96.f };
+    rect = { 0.f, 0.f, kMinWidth, 110.f };
 
     listen<AttackEvent>((EventListenerFunc)&TargetHUD::onAttack);
 }
@@ -277,110 +299,161 @@ void TargetHUD::render(DrawUtil& dc, bool isDefault, bool inEditor) {
     auto& mc = static_cast<MCDrawUtil&>(dc);
     const bool cacheText = !isDefault && !inEditor;
     const float nameSize = std::get<FloatValue>(textSize).value;
+    const float numberSize = nameSize * 0.8f;
     const bool head = std::get<BoolValue>(showHead);
+
+    const d2d::Color bg(std::get<ColorValue>(backgroundColor).getMainColor());
+    const d2d::Color accent(std::get<ColorValue>(accentColor).getMainColor());
+    const d2d::Color accentDim = withAlpha(accent, 0.45f);
+    const d2d::Color text(std::get<ColorValue>(textColor).getMainColor());
+    const d2d::Color healthCol(std::get<ColorValue>(healthColor).getMainColor());
+    const d2d::Color gold = d2d::Color::RGB(247, 190, 25);
+    const d2d::Color slotFill = d2d::Color::RGB(8, 12, 22, 235);
 
     // ---- Measure everything first ----
     const Vec2 nameBox = dc.getTextSize(info.name, Renderer::FontSelection::PrimaryRegular, nameSize, true, cacheText);
 
     const int healthHearts = heartCount(info.maxHealth);
     const bool hasHealth = info.health >= 0.f;
-    const bool asHearts = hasHealth && style.getSelectedKey() == StyleHearts && healthHearts <= kMaxHearts;
-    const int fullHearts = std::clamp(static_cast<int>(std::ceil(info.health)), 0, healthHearts * 2) / 2;
-    const bool halfHeart = std::clamp(static_cast<int>(std::ceil(info.health)), 0, healthHearts * 2) % 2 != 0;
+    const int styleKey = style.getSelectedKey();
+    // Too many hearts to draw: show the bar instead.
+    const bool asHearts = hasHealth && styleKey == StyleHearts && healthHearts <= kMaxHearts;
+    const bool asBar = hasHealth && (styleKey == StyleBar || (styleKey == StyleHearts && !asHearts));
+    const bool asNumber = hasHealth && styleKey == StyleNumber;
+    const int healthPoints = std::clamp(static_cast<int>(std::ceil(info.health)), 0, healthHearts * 2);
+    const int fullHearts = healthPoints / 2;
+    const bool halfHeart = healthPoints % 2 != 0;
     const int goldPoints = std::clamp(static_cast<int>(std::ceil(info.absorption)), 0, kMaxHearts * 2);
     const int goldHearts = (goldPoints + 1) / 2;
 
-    std::wstring numberText;
-    Vec2 numberBox {};
+    // The health number is drawn in the health colour, with the golden hearts after it in gold.
+    std::wstring healthText;
+    std::wstring goldText;
+    Vec2 healthTextBox {};
+    Vec2 goldTextBox {};
+    if (asBar || asNumber) {
+        healthText = std::format(L"{:.0f}/{:.0f}", std::ceil(info.health), std::ceil(info.maxHealth));
+        healthTextBox = dc.getTextSize(healthText, Renderer::FontSelection::PrimaryRegular, numberSize, true, cacheText);
+        if (goldPoints > 0) {
+            goldText = std::format(L" +{}", goldPoints);
+            goldTextBox = dc.getTextSize(goldText, Renderer::FontSelection::PrimaryRegular, numberSize, true, cacheText);
+        }
+    }
+    const float numberW = healthTextBox.x + goldTextBox.x;
+
     float healthW = 0.f;
     float healthH = 0.f;
-    if (hasHealth) {
-        if (asHearts) {
-            const int widest = std::min(std::max(healthHearts, goldHearts), kHeartsPerRow);
-            healthW = kHeartPitchX * widest + kHeartPx;
-            healthH = kHeartPitchY * (rowsFor(healthHearts) + rowsFor(goldHearts));
-        } else {
-            numberText = std::format(L"{:.0f} / {:.0f}", std::ceil(info.health), std::ceil(info.maxHealth));
-            if (goldPoints > 0) numberText += std::format(L"  +{}", goldPoints);
-            numberBox = dc.getTextSize(numberText, Renderer::FontSelection::PrimaryRegular, nameSize * 0.85f, true,
-                                       cacheText);
-            healthW = numberBox.x;
-            healthH = numberBox.y;
-        }
+    if (asBar) {
+        healthW = kBarMinWidth + kNumberGap + numberW;
+        healthH = kBarHeight;
+    } else if (asHearts) {
+        const int widest = std::min(std::max(healthHearts, goldHearts), kHeartsPerRow);
+        healthW = kHeartPitchX * widest + kHeartPx;
+        healthH = kHeartPitchY * (rowsFor(healthHearts) + rowsFor(goldHearts));
+    } else if (asNumber) {
+        healthW = numberW;
+        healthH = healthTextBox.y;
     }
 
     const bool armorOn = std::get<BoolValue>(showArmor);
     const bool offhandOn = std::get<BoolValue>(showOffhand);
-    const int slotCount = (armorOn ? 4 : 0) + (offhandOn ? 1 : 0);
+    const bool itemsOn = armorOn || offhandOn;
     float itemsW = 0.f;
-    if (slotCount > 0) {
-        itemsW = slotCount * kIconSize + (slotCount - 1) * kIconSpacing;
-        if (armorOn && offhandOn) itemsW += kOffhandGap - kIconSpacing;
-    }
-    const float itemsH = slotCount > 0 ? kIconSize : 0.f;
+    if (armorOn) itemsW += 4 * kSlotBox + 3 * kSlotSpacing;
+    if (offhandOn) itemsW += (armorOn ? kOffhandGap * 2 + kLine : 0.f) + kSlotBox;
 
     float contentW = std::max({ nameBox.x, healthW, itemsW });
     float contentH = nameBox.y;
-    if (healthH > 0.f) contentH += kLineGap + healthH;
-    if (itemsH > 0.f) contentH += kLineGap + itemsH;
+    if (healthH > 0.f) contentH += kRowGap + healthH;
+    if (itemsOn) contentH += kRowGap + kLine + kRowGap + kSlotBox;
 
-    const float headW = head ? kHeadSize + kHeadGap : 0.f;
-    const float width = std::max(kMinWidth, kPadding * 2.f + kAccentWidth + headW + contentW);
-    const float height = kPadding * 2.f + std::max(head ? kHeadSize : 0.f, contentH);
+    const float leftPart = head ? kHeadBox + kDividerGap + kLine + kDividerGap : 0.f;
+    const float contentLeft = kOuterPad + leftPart;
+    const float width = std::max(kMinWidth, contentLeft + contentW + kOuterPad);
+    const float height = kOuterPad * 2.f + std::max(head ? kHeadBox : 0.f, contentH);
+    contentW = width - kOuterPad - contentLeft; // Let the content (and the bar) use the whole width.
 
     rect.right = rect.left + width;
     rect.bottom = rect.top + height;
 
-    const float headLeft = kPadding + kAccentWidth;
-    const float headTop = (height - kHeadSize) * 0.5f;
-    const float contentLeft = headLeft + headW;
     const float contentTop = (height - contentH) * 0.5f;
+    const float nameY = contentTop;
+    const float healthY = nameY + nameBox.y + kRowGap;
+    const float afterHealthY = healthH > 0.f ? healthY + healthH : nameY + nameBox.y;
+    const float dividerY = afterHealthY + kRowGap;
+    const float itemsY = dividerY + kLine + kRowGap;
 
-    float y = contentTop;
-    const float nameY = y;
-    y += nameBox.y + kLineGap;
-    const float healthY = y;
-    if (healthH > 0.f) y += healthH + kLineGap;
-    const float itemsY = y;
+    const float headLeft = kOuterPad;
+    const float headTop = (height - kHeadBox) * 0.5f;
+    const float dividerX = headLeft + kHeadBox + kDividerGap;
 
-    // Item slot positions: armor first, then a slightly larger gap, then the offhand.
+    // Slot positions: armor from the left, the offhand against the right edge behind its own divider.
     struct Slot {
         float x;
         SDK::ItemStack* stack;
     };
     std::vector<Slot> slots;
-    {
-        float x = contentLeft;
-        if (armorOn) {
-            for (int i = 0; i < 4; ++i) {
-                slots.push_back({ x, info.armor[i] });
-                x += kIconSize + kIconSpacing;
-            }
-        }
-        if (offhandOn) {
-            if (armorOn) x += kOffhandGap - kIconSpacing;
-            slots.push_back({ x, info.offhand });
+    float offhandDividerX = -1.f;
+    if (armorOn) {
+        for (int i = 0; i < 4; ++i) {
+            slots.push_back({ contentLeft + i * (kSlotBox + kSlotSpacing), info.armor[i] });
         }
     }
+    if (offhandOn) {
+        const float offhandX = contentLeft + contentW - kSlotBox;
+        slots.push_back({ offhandX, info.offhand });
+        if (armorOn) offhandDividerX = offhandX - kOffhandGap - kLine;
+    }
 
-    const d2d::Color bg(std::get<ColorValue>(backgroundColor).getMainColor());
-    const d2d::Color accent(std::get<ColorValue>(accentColor).getMainColor());
-    const d2d::Color text(std::get<ColorValue>(textColor).getMainColor());
-
-    // ---- Shapes: panel, head backdrop, hearts, empty item slots ----
+    // ---- Shapes: panel, frames, dividers, health, slots ----
     // Deferred UI meshes must be resolved before the item renderer changes render state.
     mc.flush(false);
     mc.setImmediate(true);
 
-    mc.fillRectangle({ 0.f, 0.f, width, height }, bg);
-    mc.fillRectangle({ 0.f, 0.f, kAccentWidth, height }, accent);
+    // Panel with the four outer corners cut off, and a thin border that follows the same shape.
+    mc.fillRectangle({ kChamfer, 0.f, width - kChamfer, height }, bg);
+    mc.fillRectangle({ 0.f, kChamfer, kChamfer, height - kChamfer }, bg);
+    mc.fillRectangle({ width - kChamfer, kChamfer, width, height - kChamfer }, bg);
+    mc.fillRectangle({ kChamfer, 0.f, width - kChamfer, 1.5f }, accentDim);
+    mc.fillRectangle({ kChamfer, height - 1.5f, width - kChamfer, height }, accentDim);
+    mc.fillRectangle({ 0.f, kChamfer, 1.5f, height - kChamfer }, accentDim);
+    mc.fillRectangle({ width - 1.5f, kChamfer, width, height - kChamfer }, accentDim);
 
     if (head) {
-        mc.fillRectangle({ headLeft, headTop, headLeft + kHeadSize, headTop + kHeadSize },
-                         d2d::Color::RGB(40, 40, 40, 255));
+        d2d::Rect headFrame { headLeft, headTop, headLeft + kHeadBox, headTop + kHeadBox };
+        mc.fillRectangle(headFrame, slotFill);
+        fillFrame(mc, headFrame, kLine, accent);
+        mc.fillRectangle({ dividerX, kOuterPad, dividerX + kLine, height - kOuterPad }, accentDim);
     }
 
-    if (hasHealth && asHearts) {
+    if (asBar) {
+        const float barW = std::max(40.f, contentW - kNumberGap - numberW);
+        d2d::Rect bar { contentLeft, healthY, contentLeft + barW, healthY + kBarHeight };
+        mc.fillRectangle(bar, d2d::Color::RGB(14, 8, 12, 240));
+        fillFrame(mc, bar, kLine, accent);
+
+        // Segments: one per health point (at most 20). The last one fills partly.
+        const float innerLeft = bar.left + kLine + 2.f;
+        const float innerRight = bar.right - kLine - 2.f;
+        const float innerTop = bar.top + kLine + 2.f;
+        const float innerBottom = bar.bottom - kLine - 2.f;
+        const int segments = std::clamp(static_cast<int>(std::ceil(info.maxHealth)), 1, kMaxSegments);
+        const float segW = ((innerRight - innerLeft) - (segments - 1) * kBarGap) / segments;
+        const float filled = std::clamp(info.health / std::max(info.maxHealth, 1.f), 0.f, 1.f) * segments;
+        for (int i = 0; i < segments; ++i) {
+            const float x = innerLeft + i * (segW + kBarGap);
+            mc.fillRectangle({ x, innerTop, x + segW, innerBottom }, withAlpha(healthCol, 0.2f));
+            const float amount = std::clamp(filled - i, 0.f, 1.f);
+            if (amount > 0.f) mc.fillRectangle({ x, innerTop, x + segW * amount, innerBottom }, healthCol);
+        }
+
+        // Golden hearts: a gold strip along the top of the bar, as long as the share of max health they add.
+        if (goldPoints > 0) {
+            const float share = std::clamp(info.absorption / std::max(info.maxHealth, 1.f), 0.f, 1.f);
+            mc.fillRectangle({ innerLeft, innerTop, innerLeft + (innerRight - innerLeft) * share, innerTop + 3.f },
+                             gold);
+        }
+    } else if (asHearts) {
         // Golden hearts sit in the rows above the red ones.
         const int goldRows = rowsFor(goldHearts);
         if (goldHearts > 0) {
@@ -389,8 +462,16 @@ void TargetHUD::render(DrawUtil& dc, bool isDefault, bool inEditor) {
         drawHeartRows(dc, contentLeft, healthY + goldRows * kHeartPitchY, healthHearts, fullHearts, halfHeart, false);
     }
 
-    for (auto const& slot : slots) {
-        mc.fillRectangle({ slot.x, itemsY, slot.x + kIconSize, itemsY + kIconSize }, d2d::Color(0.f, 0.f, 0.f, 0.35f));
+    if (itemsOn) {
+        mc.fillRectangle({ contentLeft, dividerY, contentLeft + contentW, dividerY + kLine }, accentDim);
+        for (auto const& slot : slots) {
+            d2d::Rect box { slot.x, itemsY, slot.x + kSlotBox, itemsY + kSlotBox };
+            mc.fillRectangle(box, slotFill);
+            fillFrame(mc, box, 1.5f, accent);
+        }
+        if (offhandDividerX >= 0.f) {
+            mc.fillRectangle({ offhandDividerX, itemsY, offhandDividerX + kLine, itemsY + kSlotBox }, accentDim);
+        }
     }
 
     mc.setImmediate(false);
@@ -404,33 +485,52 @@ void TargetHUD::render(DrawUtil& dc, bool isDefault, bool inEditor) {
         mc.renderCtx->getTexture(&texture, SDK::ResourceLocation(info.faceTexturePath, textureFileSystem),
                                  externalTexture);
         if (texture.textureData) {
-            d2d::Rect headRect { headLeft, headTop, headLeft + kHeadSize, headTop + kHeadSize };
+            d2d::Rect headRect { headLeft + kHeadInset, headTop + kHeadInset, headLeft + kHeadBox - kHeadInset,
+                                 headTop + kHeadBox - kHeadInset };
             mc.drawImage(texture, headRect.getPos(), headRect.getSize(), { 0.f, 0.f }, { 1.f, 1.f },
                          d2d::Colors::WHITE);
         }
     }
 
     // ---- Text ----
-    dc.drawText({ contentLeft, nameY, contentLeft + contentW + 4.f, nameY + nameBox.y + 1.f }, info.name, text,
+    dc.drawText({ contentLeft, nameY, contentLeft + contentW, nameY + nameBox.y + 1.f }, info.name, text,
                 Renderer::FontSelection::PrimaryRegular, nameSize, DWRITE_TEXT_ALIGNMENT_LEADING,
                 DWRITE_PARAGRAPH_ALIGNMENT_NEAR, cacheText);
 
-    if (hasHealth && !asHearts) {
-        dc.drawText({ contentLeft, healthY, contentLeft + contentW + 4.f, healthY + numberBox.y + 1.f }, numberText,
-                    text, Renderer::FontSelection::PrimaryRegular, nameSize * 0.85f, DWRITE_TEXT_ALIGNMENT_LEADING,
-                    DWRITE_PARAGRAPH_ALIGNMENT_NEAR, cacheText);
+    if (asBar) {
+        // The number sits to the right of the bar, centred on it. Golden hearts follow in gold.
+        const float numberX = contentLeft + contentW - numberW;
+        dc.drawText({ numberX, healthY, numberX + healthTextBox.x + 4.f, healthY + kBarHeight }, healthText, healthCol,
+                    Renderer::FontSelection::PrimaryRegular, numberSize, DWRITE_TEXT_ALIGNMENT_LEADING,
+                    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, cacheText);
+        if (!goldText.empty()) {
+            const float goldX = numberX + healthTextBox.x;
+            dc.drawText({ goldX, healthY, goldX + goldTextBox.x + 4.f, healthY + kBarHeight }, goldText, gold,
+                        Renderer::FontSelection::PrimaryRegular, numberSize, DWRITE_TEXT_ALIGNMENT_LEADING,
+                        DWRITE_PARAGRAPH_ALIGNMENT_CENTER, cacheText);
+        }
+    } else if (asNumber) {
+        dc.drawText({ contentLeft, healthY, contentLeft + healthTextBox.x + 4.f, healthY + healthTextBox.y + 1.f },
+                    healthText, healthCol, Renderer::FontSelection::PrimaryRegular, numberSize,
+                    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_NEAR, cacheText);
+        if (!goldText.empty()) {
+            const float goldX = contentLeft + healthTextBox.x;
+            dc.drawText({ goldX, healthY, goldX + goldTextBox.x + 4.f, healthY + goldTextBox.y + 1.f }, goldText, gold,
+                        Renderer::FontSelection::PrimaryRegular, numberSize, DWRITE_TEXT_ALIGNMENT_LEADING,
+                        DWRITE_PARAGRAPH_ALIGNMENT_NEAR, cacheText);
+        }
     }
 
     // ---- Armor and offhand ----
     mc.flush(false);
+    const float iconInset = (kSlotBox - kSlotIcon) * 0.5f;
     for (auto const& slot : slots) {
         if (!slot.stack || !slot.stack->getItem()) continue;
 
-        mc.drawItem(slot.stack, { slot.x, itemsY }, kIconSize / 48.f, 1.f);
+        mc.drawItem(slot.stack, { slot.x + iconInset, itemsY + iconInset }, kSlotIcon / 48.f, 1.f);
         if (slot.stack->itemCount > 1) {
-            dc.drawText({ slot.x, itemsY, slot.x + kIconSize, itemsY + kIconSize },
-                        std::to_wstring(slot.stack->itemCount), d2d::Colors::WHITE,
-                        Renderer::FontSelection::PrimaryRegular, 18.f, DWRITE_TEXT_ALIGNMENT_TRAILING,
+            dc.drawText({ slot.x, itemsY, slot.x + kSlotBox - 2.f, itemsY + kSlotBox }, std::to_wstring(slot.stack->itemCount),
+                        d2d::Colors::WHITE, Renderer::FontSelection::PrimaryRegular, 18.f, DWRITE_TEXT_ALIGNMENT_TRAILING,
                         DWRITE_PARAGRAPH_ALIGNMENT_FAR);
         }
     }
