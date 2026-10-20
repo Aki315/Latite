@@ -321,6 +321,8 @@
         "client.hudmodule.targetHud.showArmor.desc": "Shows the helmet, chestplate, leggings and boots they wear.",
         "client.hudmodule.targetHud.showOffhand.name": "Show Offhand",
         "client.hudmodule.targetHud.showOffhand.desc": "Shows the item in their offhand.",
+        "client.hudmodule.targetHud.showDurability.name": "Show Item Durability",
+        "client.hudmodule.targetHud.showDurability.desc": "Shows a durability bar on armor and offhand items once they are damaged, like a shield. Other players' durability only changes when the server sends it.",
         "client.hudmodule.targetHud.showAbsorption.name": "Show Golden Hearts",
         "client.hudmodule.targetHud.showAbsorption.desc": "Also shows golden (absorption) hearts, like from golden apples.",
         "client.hudmodule.targetHud.textSize.name": "Text Size",
