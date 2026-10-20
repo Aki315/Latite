@@ -173,43 +173,53 @@ namespace {
         strip(f, pts, color);
     }
 
-    // The area between a rectangle's corner and the quarter circle that rounds it.
-    void fillCornerWedge(Frame& f, Vec2 corner, Vec2 arcCenter, float r, float a0, d2d::Color const& color) {
-        constexpr int n = 12;
-        std::vector<Vec2> pts;
-        for (int i = 0; i <= n; ++i) {
-            const float a = a0 + (kPi * 0.5f) * static_cast<float>(i) / n;
-            pts.push_back({ arcCenter.x + r * std::cos(a), arcCenter.y + r * std::sin(a) });
-            pts.push_back(corner);
-        }
-        strip(f, pts, color);
-    }
-
-    // Rounds the corners of whatever was drawn inside rc, by painting the corners in the panel colour.
-    // A radius of half the size turns a square into a circle.
-    void roundCorners(Frame& f, d2d::Rect const& rc, float r, d2d::Color const& mask) {
-        r = std::min(r, std::min(rc.right - rc.left, rc.bottom - rc.top) * 0.5f);
-        fillCornerWedge(f, { rc.left, rc.top }, { rc.left + r, rc.top + r }, r, kPi, mask);
-        fillCornerWedge(f, { rc.right, rc.top }, { rc.right - r, rc.top + r }, r, kPi * 1.5f, mask);
-        fillCornerWedge(f, { rc.right, rc.bottom }, { rc.right - r, rc.bottom - r }, r, 0.f, mask);
-        fillCornerWedge(f, { rc.left, rc.bottom }, { rc.left + r, rc.bottom - r }, r, kPi * 0.5f, mask);
-    }
-
-    // The player's face, with rounded corners.
+    // The player's face, cut to a rounded rectangle (a radius of half the size makes a circle).
+    // The texture is drawn as thin horizontal strips, one screen pixel tall, each only as wide as the shape is at
+    // that height. That gives clean round edges on any panel colour, without covering corners.
     void drawHead(Frame& f, d2d::Rect const& box, float radius) {
-        f.mc->fillRectangle(box, d2d::Color::RGB(30, 36, 52));
+        const float w = box.right - box.left;
+        const float h = box.bottom - box.top;
+        radius = std::min(radius, std::min(w, h) * 0.5f);
 
+        SDK::TexturePtr texture {};
+        bool haveTexture = false;
         auto& path = f.info->faceTexturePath;
         if (!path.empty() && f.mc->renderCtx) {
-            SDK::TexturePtr texture {};
             const auto external = std::filesystem::path(path).is_absolute();
             const auto fileSystem = external ? SDK::ResourceFileSystem::Raw : SDK::ResourceFileSystem::UserPackage;
             f.mc->renderCtx->getTexture(&texture, SDK::ResourceLocation(path, fileSystem), external);
-            if (texture.textureData) {
-                f.mc->drawImage(texture, box.getPos(), box.getSize(), { 0.f, 0.f }, { 1.f, 1.f }, d2d::Colors::WHITE);
-            }
+            haveTexture = texture.textureData != nullptr;
         }
-        roundCorners(f, box, radius, alpha(f.bg, 1.f));
+
+        if (!haveTexture) {
+            // No skin yet: a plain dark shape.
+            fillRound(f, box, radius, d2d::Color::RGB(30, 36, 52));
+            return;
+        }
+
+        const float gs = f.mc->guiScale;
+        const int rows = std::max(1, static_cast<int>(std::ceil(h * gs)));
+        for (int i = 0; i < rows; ++i) {
+            const float y0 = h * static_cast<float>(i) / static_cast<float>(rows);
+            const float y1 = h * static_cast<float>(i + 1) / static_cast<float>(rows);
+            const float mid = (y0 + y1) * 0.5f;
+
+            // How far the shape is cut in from each side at this height.
+            float inset = 0.f;
+            const float fromEdge = std::min(mid, h - mid);
+            if (fromEdge < radius) {
+                const float dy = radius - fromEdge;
+                inset = radius - std::sqrt(std::max(0.f, radius * radius - dy * dy));
+            }
+            const float x0 = inset;
+            const float x1 = w - inset;
+            if (x1 <= x0) continue;
+
+            f.mc->renderCtx->drawImage(texture, { (box.left + x0) * gs, (box.top + y0) * gs },
+                                       { (x1 - x0) * gs, (y1 - y0) * gs }, { x0 / w, y0 / h },
+                                       { (x1 - x0) / w, (y1 - y0) / h });
+        }
+        f.mc->renderCtx->flushImages(d2d::Colors::WHITE, 1.f, SDK::HashedString("ui_textured_and_glcolor_sprite"));
     }
 
     // A smooth pill-shaped bar: dark track, fill in the health colour. Optional quarter ticks.
@@ -335,7 +345,7 @@ namespace {
     constexpr int kMaxHeartsInRow = 20;
 
     // lit: 0 = empty, 1 = half (left side coloured), 2 = full.
-    void drawHeart(Frame& f, float x, float y, int lit, bool gold) {
+    void drawHeart(Frame& f, float x, float y, int lit, bool gold, float px = kHeartPx) {
         const d2d::Color outline = d2d::Color::RGB(25, 8, 10);
         const d2d::Color empty = d2d::Color::RGB(58, 62, 78);
         const d2d::Color filled = gold ? d2d::Color::RGB(247, 190, 25) : d2d::Color::RGB(226, 55, 65);
@@ -359,9 +369,7 @@ namespace {
                 while (end < kHeartCols && kHeart[r][end] == ch && litAt(end) == on) ++end;
 
                 const d2d::Color color = ch == 'O' ? outline : (ch == 'R' ? (on ? filled : empty) : (on ? shine : empty));
-                f.mc->fillRectangle({ left + c * kHeartPx, top + r * kHeartPx, left + end * kHeartPx,
-                                      top + (r + 1) * kHeartPx },
-                                    color);
+                f.mc->fillRectangle({ left + c * px, top + r * px, left + end * px, top + (r + 1) * px }, color);
                 c = end;
             }
         }
@@ -374,15 +382,21 @@ namespace {
         int red = 0;
         int gold = 0;
         bool usable = false; // false when there are too many hearts for one row
+        float px = kHeartPx; // Size of one heart pixel; a whole number keeps the hearts crisp.
+        float pitch = kHeartPitch;
+        float height = kHeartHeight;
         float width = 0.f;
     };
 
-    HeartsRow heartsRow(Frame& f) {
+    HeartsRow heartsRow(Frame& f, float px = kHeartPx) {
         HeartsRow hr;
         hr.red = heartCount(f.info->maxHealth);
         hr.gold = (f.goldPoints + 1) / 2;
         hr.usable = hr.red + hr.gold <= kMaxHeartsInRow;
-        hr.width = hr.usable ? kHeartPitch * static_cast<float>(hr.red + hr.gold) + kHeartPx : 0.f;
+        hr.px = px;
+        hr.pitch = (kHeartCols - 1) * px;
+        hr.height = kHeartRows * px;
+        hr.width = hr.usable ? hr.pitch * static_cast<float>(hr.red + hr.gold) + px : 0.f;
         return hr;
     }
 
@@ -393,16 +407,16 @@ namespace {
     void drawHeartsRowAt(Frame& f, float x, float y, HeartsRow const& hr) {
         for (int i = 0; i < hr.red; ++i) {
             const int lit = f.healthPoints >= 2 * i + 2 ? 2 : (f.healthPoints == 2 * i + 1 ? 1 : 0);
-            drawHeart(f, x + kHeartPitch * static_cast<float>(i), y, lit, false);
+            drawHeart(f, x + hr.pitch * static_cast<float>(i), y, lit, false, hr.px);
         }
         for (int g = 0; g < hr.gold; ++g) {
             const int lit = f.goldPoints >= 2 * g + 2 ? 2 : 1;
-            drawHeart(f, x + kHeartPitch * static_cast<float>(hr.red + g), y, lit, true);
+            drawHeart(f, x + hr.pitch * static_cast<float>(hr.red + g), y, lit, true, hr.px);
         }
     }
 
     // One row under the name: a thin bar, a row of hearts, or nothing.
-    float graphicRowHeight(int kind, float barH) { return kind == 1 ? barH : (kind == 2 ? kHeartHeight : 0.f); }
+    float graphicRowHeight(int kind, float barH, HeartsRow const& hr) { return kind == 1 ? barH : (kind == 2 ? hr.height : 0.f); }
 
     void drawGraphicRow(Frame& f, int kind, float x, float y, float w, float barH, HeartsRow const& hr) {
         if (kind == 1) {
@@ -429,7 +443,7 @@ namespace {
         const ItemsRow probe = itemsRow(f, 0.f, 0.f, box, 5.f, 7.f);
         const HeartsRow hr = heartsRow(f);
         const int kind = graphicKind(f, hr);
-        const float graphicH = graphicRowHeight(kind, barH);
+        const float graphicH = graphicRowHeight(kind, barH, hr);
 
         const float topRowH = std::max(nameBox.y, chip.y);
         const float contentW =
@@ -485,7 +499,7 @@ namespace {
 
         const HeartsRow hr = heartsRow(f);
         const int kind = graphicKind(f, hr);
-        const float graphicH = graphicRowHeight(kind, barH);
+        const float graphicH = graphicRowHeight(kind, barH, hr);
         const ItemsRow probe = itemsRow(f, 0.f, 0.f, box, 5.f, 7.f);
 
         const float topRowH = std::max(nameBox.y, healthBox.y);
@@ -544,7 +558,7 @@ namespace {
 
         const float numberRowW = bigBox.x + 4.f + maxBox.x + (f.goldText.empty() ? 0.f : 8.f + chip.x);
         const float contentW = std::max({ 110.f, nameBox.x, numberRowW, probe.width, kind == 2 ? hr.width : 0.f });
-        const float heartsH = kind == 2 ? 5.f + kHeartHeight : 0.f;
+        const float heartsH = kind == 2 ? 5.f + hr.height : 0.f;
         const float contentH =
             nameBox.y + 2.f + bigBox.y + heartsH + (probe.slots.empty() ? 0.f : 6.f + box);
         const float height = std::max(ringBox, contentH) + pad * 2.f;
@@ -618,7 +632,7 @@ namespace {
         const Vec2 goldBox = f.goldText.empty() ? Vec2 { 0.f, 0.f } : measure(f, f.goldText, numSize);
         const ItemsRow probe = itemsRow(f, 0.f, 0.f, box, 3.f, 6.f);
         const bool hasItems = !probe.slots.empty();
-        const HeartsRow hr = heartsRow(f);
+        const HeartsRow hr = heartsRow(f, 1.f); // Small hearts, to keep the tag slim.
         const int kind = graphicKind(f, hr);
         const float graphicW = kind == 1 ? barW : (kind == 2 ? hr.width : 0.f);
 
@@ -649,7 +663,7 @@ namespace {
         if (kind == 1) {
             pillBar(f, graphicX, (height - barH) * 0.5f, barW, barH, true);
         } else if (kind == 2) {
-            drawHeartsRowAt(f, graphicX, (height - kHeartHeight) * 0.5f, hr);
+            drawHeartsRowAt(f, graphicX, (height - hr.height) * 0.5f, hr);
         }
         putText(f, numberX, 0.f, healthBox.x + 2.f, height, f.healthText, f.health, numSize);
         putText(f, numberX + healthBox.x, 0.f, goldBox.x + 2.f, height, f.goldText, f.gold, numSize);
@@ -704,7 +718,7 @@ namespace {
 
         const float leftColH = headS + 4.f + nameBox.y;
         const float areaH = std::max({ leftColH, numberH, gridH });
-        const float heartsH = kind == 2 ? 8.f + kHeartHeight : 0.f; // A row of hearts along the bottom.
+        const float heartsH = kind == 2 ? 8.f + hr.height : 0.f; // A row of hearts along the bottom.
         const float height = areaH + heartsH + pad * 2.f;
         const float barArea = kind == 1 ? barW + 10.f : 0.f; // The tall bar only in the bar design.
         const float headColX = pad + barArea;
