@@ -51,6 +51,7 @@ private:
     ValueType duration = FloatValue(5.f);
     ValueType showArmor = BoolValue(true);
     ValueType showOffhand = BoolValue(true);
+    ValueType showDurability = BoolValue(true);
     ValueType showAbsorption = BoolValue(true);
     ValueType textSize = FloatValue(20.f);
     ValueType textColor = ColorValue(1.f, 1.f, 1.f, 1.f);

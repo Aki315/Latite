@@ -3,10 +3,14 @@
 
 #include "client/event/events/AttackEvent.h"
 #include "client/misc/PlayerHeadCache.h"
+#include "mc/Addresses.h"
 #include "mc/common/client/game/ClientInstance.h"
 #include "mc/common/client/renderer/Tessellator.h"
 #include "mc/common/entity/component/ActorEquipmentComponent.h"
 #include "mc/common/entity/component/AttributesComponent.h"
+#include "mc/common/world/Item.h"
+#include "mc/common/world/ItemStack.h"
+#include "mc/common/world/ItemStackBase.h"
 #include "mc/common/world/actor/player/Inventory.h"
 
 #include <algorithm>
@@ -95,6 +99,7 @@ namespace {
         float textSize = 20.f;
         bool armorOn = true;
         bool offhandOn = true;
+        bool durabilityOn = true;
 
         d2d::Color bg = d2d::Color(0.f, 0.f, 0.f, 1.f);
         d2d::Color text = d2d::Color(1.f, 1.f, 1.f, 1.f);
@@ -316,6 +321,27 @@ namespace {
         }
     }
 
+    // A thin durability bar along the bottom of a slot, like the inventory's. Only once the item is damaged.
+    // For other players this is the durability their client was last told about.
+    void drawDurabilityBar(Frame& f, Slot const& slot, float box) {
+        if (!Signatures::ItemStackBase_getDamageValue.result) return;
+
+        auto* item = slot.stack->getItem();
+        const int maxDamage = item ? item->getMaxDamage() : 0;
+        if (maxDamage <= 0) return; // Not an item with durability.
+
+        const int damage = std::clamp(static_cast<int>(slot.stack->getDamageValue()), 0, maxDamage);
+        if (damage == 0) return;
+
+        const float fraction = 1.f - static_cast<float>(damage) / static_cast<float>(maxDamage);
+        const float x0 = slot.x + 3.f;
+        const float x1 = slot.x + box - 3.f;
+        const float y1 = slot.y + box - 3.f;
+        const float y0 = y1 - 2.5f;
+        f.mc->fillRectangle({ x0, y0, x1, y1 }, d2d::Color(0.f, 0.f, 0.f, 0.75f));
+        f.mc->fillRectangle({ x0, y0, x0 + (x1 - x0) * fraction, y1 }, healthGradient(fraction));
+    }
+
     // Draws the items. Call after everything else, the item renderer changes render state.
     void drawSlotItems(Frame& f, ItemsRow const& row, float box, float icon) {
         f.mc->flush(false);
@@ -324,6 +350,7 @@ namespace {
             if (!slot.stack || !slot.stack->getItem()) continue;
 
             f.mc->drawItem(slot.stack, { slot.x + inset, slot.y + inset }, icon / 48.f, 1.f);
+            if (f.durabilityOn) drawDurabilityBar(f, slot, box);
             if (slot.stack->itemCount > 1) {
                 putText(f, slot.x, slot.y, box - 1.f, box, std::to_wstring(slot.stack->itemCount), d2d::Colors::WHITE,
                         13.f, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_PARAGRAPH_ALIGNMENT_FAR);
@@ -815,6 +842,8 @@ TargetHUD::TargetHUD()
                LocalizeString::get("client.hudmodule.targetHud.showArmor.desc"), showArmor);
     addSetting("showOffhand", LocalizeString::get("client.hudmodule.targetHud.showOffhand.name"),
                LocalizeString::get("client.hudmodule.targetHud.showOffhand.desc"), showOffhand);
+    addSetting("showDurability", LocalizeString::get("client.hudmodule.targetHud.showDurability.name"),
+               LocalizeString::get("client.hudmodule.targetHud.showDurability.desc"), showDurability);
     addSetting("showAbsorption", LocalizeString::get("client.hudmodule.targetHud.showAbsorption.name"),
                LocalizeString::get("client.hudmodule.targetHud.showAbsorption.desc"), showAbsorption);
     addSliderSetting("textSize", LocalizeString::get("client.hudmodule.targetHud.textSize.name"),
@@ -965,6 +994,7 @@ void TargetHUD::render(DrawUtil& dc, bool isDefault, bool inEditor) {
     f.textSize = std::get<FloatValue>(textSize).value;
     f.armorOn = std::get<BoolValue>(showArmor);
     f.offhandOn = std::get<BoolValue>(showOffhand);
+    f.durabilityOn = std::get<BoolValue>(showDurability);
 
     f.bg = d2d::Color(std::get<ColorValue>(backgroundColor).getMainColor());
     f.text = d2d::Color(std::get<ColorValue>(textColor).getMainColor());
