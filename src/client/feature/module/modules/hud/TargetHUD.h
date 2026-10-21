@@ -51,8 +51,16 @@ private:
     ValueType duration = FloatValue(5.f);
     ValueType showArmor = BoolValue(true);
     ValueType showOffhand = BoolValue(true);
-    ValueType showDurability = BoolValue(true);
+    // Durability bars are separate for armor and for the offhand item (a shield). The armor value is only what the
+    // server last sent, so it starts off; a better estimate comes later.
+    ValueType showArmorDurability = BoolValue(false);
+    ValueType showShieldDurability = BoolValue(true);
+    static constexpr int ShieldNumberRemaining = 0; // 312
+    static constexpr int ShieldNumberPercent = 1;   // 93%
+    static constexpr int ShieldNumberOff = 2;
+    EnumData shieldNumber;
     ValueType showAbsorption = BoolValue(true);
+    ValueType itemSize = FloatValue(1.3f); // Size of the armor, offhand and item icons; 1 = the original size.
     ValueType textSize = FloatValue(20.f);
     ValueType textColor = ColorValue(1.f, 1.f, 1.f, 1.f);
     ValueType backgroundColor = ColorValue(0.067f, 0.082f, 0.129f, 0.94f);

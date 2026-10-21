@@ -17,6 +17,7 @@
 #include <cmath>
 #include <filesystem>
 #include <format>
+#include <optional>
 #include <vector>
 
 namespace {
@@ -99,7 +100,15 @@ namespace {
         float textSize = 20.f;
         bool armorOn = true;
         bool offhandOn = true;
-        bool durabilityOn = true;
+        bool armorBarOn = false;     // durability bar on armor
+        bool shieldBarOn = true;     // durability bar on the offhand item
+        bool shieldNumberOn = true;  // exact durability next to the offhand item
+        bool shieldPercent = false;  // ... as a percent instead of the points left
+        float labelSize = 12.f;
+        float itemScale = 1.f;       // Item icon size multiplier from the Item Size setting.
+        float labelW = 0.f;          // Room reserved for the number, so the layout never jumps.
+        std::wstring shieldText;
+        d2d::Color shieldColor = d2d::Color(1.f, 1.f, 1.f, 1.f);
 
         d2d::Color bg = d2d::Color(0.f, 0.f, 0.f, 1.f);
         d2d::Color text = d2d::Color(1.f, 1.f, 1.f, 1.f);
@@ -278,12 +287,15 @@ namespace {
         float x;
         float y;
         SDK::ItemStack* stack;
+        bool offhand = false;
     };
 
     struct ItemsRow {
         std::vector<Slot> slots;
         float width = 0.f;
         float dividerX = -1.f; // Centre of the line between the armor and the offhand, -1 = none.
+        float labelX = -1.f;   // Where the shield durability number goes, -1 = none.
+        float labelW = 0.f;
     };
 
     // Helmet to boots, then a gap with a divider, then the offhand.
@@ -303,8 +315,14 @@ namespace {
                 row.dividerX = cx;
                 cx += dividerGap;
             }
-            row.slots.push_back({ cx, y, f.info->offhand });
+            row.slots.push_back({ cx, y, f.info->offhand, true });
             cx += box;
+            // Room for the durability number to the right of the offhand item.
+            if (f.shieldBarOn && f.shieldNumberOn) {
+                row.labelX = cx + 4.f;
+                row.labelW = f.labelW;
+                cx += 4.f + f.labelW;
+            }
         }
         row.width = row.slots.empty() ? 0.f : cx - x;
         return row;
@@ -321,23 +339,35 @@ namespace {
         }
     }
 
+    struct Durability {
+        int remaining;
+        int maxDamage;
+    };
+
+    // The durability points an item has left, or nothing for items that don't wear out (food, blocks...).
+    std::optional<Durability> durabilityOf(SDK::ItemStack* stack) {
+        if (!stack || !Signatures::ItemStackBase_getDamageValue.result) return std::nullopt;
+
+        auto* item = stack->getItem();
+        const int maxDamage = item ? item->getMaxDamage() : 0;
+        if (maxDamage <= 0) return std::nullopt;
+
+        const int damage = std::clamp(static_cast<int>(stack->getDamageValue()), 0, maxDamage);
+        return Durability { maxDamage - damage, maxDamage };
+    }
+
     // A thin durability bar along the bottom of a slot, like the inventory's. Only once the item is damaged.
     // For other players this is the durability their client was last told about.
     void drawDurabilityBar(Frame& f, Slot const& slot, float box) {
-        if (!Signatures::ItemStackBase_getDamageValue.result) return;
+        const auto durability = durabilityOf(slot.stack);
+        if (!durability || durability->remaining >= durability->maxDamage) return;
 
-        auto* item = slot.stack->getItem();
-        const int maxDamage = item ? item->getMaxDamage() : 0;
-        if (maxDamage <= 0) return; // Not an item with durability.
-
-        const int damage = std::clamp(static_cast<int>(slot.stack->getDamageValue()), 0, maxDamage);
-        if (damage == 0) return;
-
-        const float fraction = 1.f - static_cast<float>(damage) / static_cast<float>(maxDamage);
-        const float x0 = slot.x + 3.f;
-        const float x1 = slot.x + box - 3.f;
-        const float y1 = slot.y + box - 3.f;
-        const float y0 = y1 - 2.5f;
+        const float fraction = static_cast<float>(durability->remaining) / static_cast<float>(durability->maxDamage);
+        const float margin = 3.f * f.itemScale;
+        const float x0 = slot.x + margin;
+        const float x1 = slot.x + box - margin;
+        const float y1 = slot.y + box - margin;
+        const float y0 = y1 - 2.5f * f.itemScale;
         f.mc->fillRectangle({ x0, y0, x1, y1 }, d2d::Color(0.f, 0.f, 0.f, 0.75f));
         f.mc->fillRectangle({ x0, y0, x0 + (x1 - x0) * fraction, y1 }, healthGradient(fraction));
     }
@@ -350,10 +380,17 @@ namespace {
             if (!slot.stack || !slot.stack->getItem()) continue;
 
             f.mc->drawItem(slot.stack, { slot.x + inset, slot.y + inset }, icon / 48.f, 1.f);
-            if (f.durabilityOn) drawDurabilityBar(f, slot, box);
+            if (slot.offhand ? f.shieldBarOn : f.armorBarOn) drawDurabilityBar(f, slot, box);
             if (slot.stack->itemCount > 1) {
                 putText(f, slot.x, slot.y, box - 1.f, box, std::to_wstring(slot.stack->itemCount), d2d::Colors::WHITE,
-                        13.f, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_PARAGRAPH_ALIGNMENT_FAR);
+                        13.f * f.itemScale, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_PARAGRAPH_ALIGNMENT_FAR);
+            }
+        }
+
+        // The exact durability of the offhand item, in the room reserved to its right.
+        if (row.labelX >= 0.f && !f.shieldText.empty()) {
+            for (auto const& slot : row.slots) {
+                if (slot.offhand) putText(f, row.labelX, slot.y, row.labelW, box, f.shieldText, f.shieldColor, f.labelSize);
             }
         }
     }
@@ -459,8 +496,8 @@ namespace {
     Vec2 drawPill(Frame& f) {
         const float nameSize = f.textSize;
         const float numSize = f.textSize * 0.72f;
-        constexpr float box = 24.f;
-        constexpr float icon = 18.f;
+        const float box = 24.f * f.itemScale;
+        const float icon = 18.f * f.itemScale;
         constexpr float barH = 8.f;
         constexpr float headD = 44.f;
         constexpr float ringT = 3.f;
@@ -515,8 +552,8 @@ namespace {
         constexpr float pad = 10.f;
         constexpr float headS = 48.f;
         constexpr float gap = 12.f;
-        constexpr float box = 24.f;
-        constexpr float icon = 18.f;
+        const float box = 24.f * f.itemScale;
+        const float icon = 18.f * f.itemScale;
         constexpr float barH = 8.f;
 
         const Vec2 nameBox = measure(f, f.info->name, nameSize);
@@ -568,8 +605,8 @@ namespace {
         constexpr float headD = 44.f;
         constexpr float ringT = 5.f;
         constexpr float gap = 14.f;
-        constexpr float box = 24.f;
-        constexpr float icon = 18.f;
+        const float box = 24.f * f.itemScale;
+        const float icon = 18.f * f.itemScale;
 
         const float ringMid = headD * 0.5f + 3.f + ringT * 0.5f;
         const float ringBox = (ringMid + ringT * 0.5f) * 2.f;
@@ -648,11 +685,11 @@ namespace {
         const float numSize = f.textSize * 0.7f;
         constexpr float pad = 6.f;
         constexpr float headS = 24.f;
-        constexpr float height = 36.f;
         constexpr float barW = 120.f;
         constexpr float barH = 8.f;
-        constexpr float box = 22.f;
-        constexpr float icon = 17.f;
+        const float box = 22.f * f.itemScale;
+        const float icon = 17.f * f.itemScale;
+        const float height = std::max(36.f, box + 10.f); // The slim line grows if the icons need more room.
 
         const Vec2 nameBox = measure(f, f.info->name, nameSize);
         const Vec2 healthBox = measure(f, f.healthText, numSize);
@@ -715,8 +752,8 @@ namespace {
         constexpr float pad = 10.f;
         constexpr float barW = 8.f;
         constexpr float headS = 44.f;
-        constexpr float box = 26.f;
-        constexpr float icon = 20.f;
+        const float box = 26.f * f.itemScale;
+        const float icon = 20.f * f.itemScale;
         constexpr float spacing = 4.f;
 
         const HeartsRow hr = heartsRow(f);
@@ -738,7 +775,10 @@ namespace {
         }
         if (f.offhandOn) stacks.push_back(f.info->offhand);
         const int count = static_cast<int>(stacks.size());
-        const int cols = std::min(count, 3);
+        // The shield number goes in the free cell next to the offhand item (the last one).
+        const bool shieldLabel = f.offhandOn && f.shieldBarOn && f.shieldNumberOn;
+        const int offhandCol = (count - 1) % 3;
+        const int cols = std::max(std::min(count, 3), shieldLabel ? std::min(3, offhandCol + 2) : 0);
         const int rows = (count + 2) / 3;
         const float gridW = count > 0 ? cols * box + (cols - 1) * spacing : 0.f;
         const float gridH = count > 0 ? rows * box + (rows - 1) * spacing : 0.f;
@@ -787,7 +827,12 @@ namespace {
             const float gridTop = pad + (areaH - gridH) * 0.5f;
             for (int i = 0; i < count; ++i) {
                 row.slots.push_back({ gridX + static_cast<float>(i % 3) * (box + spacing),
-                                      gridTop + static_cast<float>(i / 3) * (box + spacing), stacks[i] });
+                                      gridTop + static_cast<float>(i / 3) * (box + spacing), stacks[i],
+                                      f.offhandOn && i == count - 1 });
+            }
+            if (shieldLabel) {
+                row.labelX = row.slots.back().x + box + spacing;
+                row.labelW = box;
             }
             drawSlotBacks(f, row, box, 6.f);
             drawSlotItems(f, row, box, icon);
@@ -842,8 +887,24 @@ TargetHUD::TargetHUD()
                LocalizeString::get("client.hudmodule.targetHud.showArmor.desc"), showArmor);
     addSetting("showOffhand", LocalizeString::get("client.hudmodule.targetHud.showOffhand.name"),
                LocalizeString::get("client.hudmodule.targetHud.showOffhand.desc"), showOffhand);
-    addSetting("showDurability", LocalizeString::get("client.hudmodule.targetHud.showDurability.name"),
-               LocalizeString::get("client.hudmodule.targetHud.showDurability.desc"), showDurability);
+    addSliderSetting("itemSize", LocalizeString::get("client.hudmodule.targetHud.itemSize.name"),
+                     LocalizeString::get("client.hudmodule.targetHud.itemSize.desc"), itemSize, FloatValue(0.75f),
+                     FloatValue(2.5f), FloatValue(0.05f));
+    addSetting("showArmorDurability", LocalizeString::get("client.hudmodule.targetHud.showArmorDurability.name"),
+               LocalizeString::get("client.hudmodule.targetHud.showArmorDurability.desc"), showArmorDurability);
+    addSetting("showShieldDurability", LocalizeString::get("client.hudmodule.targetHud.showShieldDurability.name"),
+               LocalizeString::get("client.hudmodule.targetHud.showShieldDurability.desc"), showShieldDurability);
+    shieldNumber.addEntry(EnumEntry(ShieldNumberRemaining,
+                                    LocalizeString::get("client.hudmodule.targetHud.shieldNumber.remaining.name"),
+                                    LocalizeString::get("client.hudmodule.targetHud.shieldNumber.remaining.desc")));
+    shieldNumber.addEntry(EnumEntry(ShieldNumberPercent,
+                                    LocalizeString::get("client.hudmodule.targetHud.shieldNumber.percent.name"),
+                                    LocalizeString::get("client.hudmodule.targetHud.shieldNumber.percent.desc")));
+    shieldNumber.addEntry(EnumEntry(ShieldNumberOff, LocalizeString::get("client.hudmodule.targetHud.shieldNumber.off.name"),
+                                    LocalizeString::get("client.hudmodule.targetHud.shieldNumber.off.desc")));
+    addEnumSetting("shieldNumber", LocalizeString::get("client.hudmodule.targetHud.shieldNumber.name"),
+                   LocalizeString::get("client.hudmodule.targetHud.shieldNumber.desc"), shieldNumber,
+                   "showShieldDurability"_istrue);
     addSetting("showAbsorption", LocalizeString::get("client.hudmodule.targetHud.showAbsorption.name"),
                LocalizeString::get("client.hudmodule.targetHud.showAbsorption.desc"), showAbsorption);
     addSliderSetting("textSize", LocalizeString::get("client.hudmodule.targetHud.textSize.name"),
@@ -994,7 +1055,13 @@ void TargetHUD::render(DrawUtil& dc, bool isDefault, bool inEditor) {
     f.textSize = std::get<FloatValue>(textSize).value;
     f.armorOn = std::get<BoolValue>(showArmor);
     f.offhandOn = std::get<BoolValue>(showOffhand);
-    f.durabilityOn = std::get<BoolValue>(showDurability);
+    f.armorBarOn = std::get<BoolValue>(showArmorDurability);
+    f.shieldBarOn = std::get<BoolValue>(showShieldDurability);
+    const int shieldKey = shieldNumber.getSelectedKey();
+    f.shieldNumberOn = f.shieldBarOn && shieldKey != ShieldNumberOff;
+    f.shieldPercent = shieldKey == ShieldNumberPercent;
+    f.itemScale = std::get<FloatValue>(itemSize).value;
+    f.labelSize = f.textSize * 0.6f * f.itemScale;
 
     f.bg = d2d::Color(std::get<ColorValue>(backgroundColor).getMainColor());
     f.text = d2d::Color(std::get<ColorValue>(textColor).getMainColor());
@@ -1030,6 +1097,21 @@ void TargetHUD::render(DrawUtil& dc, bool isDefault, bool inEditor) {
     f.healthMax = numberText(info.maxHealth);
     f.healthText = known ? f.healthNow + L"/" + f.healthMax : L"?";
     f.goldText = f.goldPoints > 0 ? L"+" + numberText(info.absorption) : std::wstring();
+
+    // The offhand item's exact durability. Room for it is always reserved, so the HUD does not change size
+    // depending on what they hold.
+    if (f.shieldNumberOn) {
+        f.labelW = measure(f, f.shieldPercent ? L"100%" : L"0000", f.labelSize).x + 2.f;
+        if (isDefault || inEditor) {
+            // A sample in the HUD editor.
+            f.shieldText = f.shieldPercent ? L"93%" : L"312";
+            f.shieldColor = healthGradient(0.93f);
+        } else if (auto durability = durabilityOf(info.offhand)) {
+            const int percent = durability->remaining * 100 / durability->maxDamage;
+            f.shieldText = f.shieldPercent ? std::to_wstring(percent) + L"%" : std::to_wstring(durability->remaining);
+            f.shieldColor = healthGradient(static_cast<float>(durability->remaining) / static_cast<float>(durability->maxDamage));
+        }
+    }
 
     // What to draw for the health: the design's own bar or ring, a row of hearts, or just the number.
     const int displayKey = healthDisplay.getSelectedKey();
