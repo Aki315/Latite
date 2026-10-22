@@ -80,7 +80,7 @@ namespace {
 
 HealthIndicator::HealthIndicator()
     : Module("HealthIndicator", LocalizeString::get("client.module.healthIndicator.name"),
-             LocalizeString::get("client.module.healthIndicator.desc"), GAME, nokeybind) {
+             LocalizeString::get("client.module.healthIndicator.desc"), GAME) {
     style.addEntry(EnumEntry(StyleNumber, LocalizeString::get("client.module.healthIndicator.style.number.name"),
                              LocalizeString::get("client.module.healthIndicator.style.number.desc")));
     style.addEntry(EnumEntry(StyleHearts, LocalizeString::get("client.module.healthIndicator.style.hearts.name"),
