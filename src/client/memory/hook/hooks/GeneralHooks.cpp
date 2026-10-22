@@ -98,9 +98,20 @@ LRESULT GenericHooks::MainWindow__windowProcCallback(HWND hwnd, UINT msg, WPARAM
         }
     }
 
-    if (msg == WM_KEYDOWN || msg == WM_KEYUP) {
+    // Windows sends Alt, and every key pressed while Alt is held, as "system" key messages instead of normal ones.
+    // They are treated like normal keys here, otherwise Alt can never be bound to anything (Freelook, for example).
+    const bool isSystemKey = msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP;
+    if (msg == WM_KEYDOWN || msg == WM_KEYUP || isSystemKey) {
         const int key = wParam & 0xFF;
-        const bool isDown = msg == WM_KEYDOWN;
+        const bool isDown = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+
+        // What to return when something cancelled the key. A lone Alt press that reaches Windows' default handling
+        // opens the window's system menu, so a cancelled Alt is swallowed completely. Other system keys keep the
+        // default handling, so Alt+F4 still closes the window.
+        auto cancelled = [&]() -> LRESULT {
+            if (isSystemKey && key == VK_MENU) return 0;
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
+        };
 
         {
             PluginManager::Event::Value val { L"isDown" };
@@ -118,11 +129,11 @@ LRESULT GenericHooks::MainWindow__windowProcCallback(HWND hwnd, UINT msg, WPARAM
             val2.val = util::StrToWStr(str);
 
             PluginManager::Event sEv { L"key-press", { val, val2, val3 }, true };
-            if (Latite::getPluginManager().dispatchEvent(sEv)) return DefWindowProcW(hwnd, msg, wParam, lParam);
+            if (Latite::getPluginManager().dispatchEvent(sEv)) return cancelled();
         }
 
         KeyUpdateEvent ev { key, isDown };
-        if (Eventing::get().dispatch(ev)) return DefWindowProcW(hwnd, msg, wParam, lParam);
+        if (Eventing::get().dispatch(ev)) return cancelled();
     }
 
     return MainWindow__windowProcCallbackHook->oFunc<decltype(&MainWindow__windowProcCallback)>()(hwnd, msg, wParam,
