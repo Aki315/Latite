@@ -5,6 +5,7 @@
 #include "mc/common/world/actor/player/SerializedSkinRef.h"
 
 #include <limits>
+#include <set>
 
 namespace {
     constexpr uint32_t playerHeadTextureSize = 64;
@@ -37,9 +38,82 @@ namespace {
         return hash;
     }
 
+    // Steve's face with his hair layer on top (0xRRGGBB). Shown for skins that have no face where a normal skin has
+    // one, instead of a random piece of their skin texture.
+    constexpr uint32_t steveFace[8 * 8] = {
+        0x2F200D, 0x2B1E0D, 0x2F1F0F, 0x281C0B, 0x241808, 0x261A0A, 0x2B1E0D, 0x2A1D0D,
+        0x2B1E0D, 0x2B1E0D, 0x2B1E0D, 0x332411, 0x422A12, 0x3F2A15, 0x2C1E0E, 0x281C0B,
+        0x2B1E0D, 0xB6896C, 0xBD8E72, 0xC69680, 0xBD8B72, 0xBD8E74, 0xAC765A, 0x342512,
+        0xAA7D66, 0xB4846D, 0xAA7D66, 0xAD806D, 0x9C725C, 0xBB8972, 0x9C694C, 0x9C694C,
+        0xB4846D, 0xFFFFFF, 0x523D89, 0xB57B67, 0xBB8972, 0x523D89, 0xFFFFFF, 0xAA7D66,
+        0x9C6346, 0xB37B62, 0xB78272, 0x6A4030, 0x6A4030, 0xBE886C, 0xA26A47, 0x805334,
+        0x905E43, 0x965F40, 0x774235, 0x774235, 0x774235, 0x774235, 0x8F5E3E, 0x815339,
+        0x6F452C, 0x6D432A, 0x815339, 0x815339, 0x7A4E33, 0x83553B, 0x83553B, 0x7A4E33,
+    };
+
+    std::vector<uint8_t> makeSteveHeadRgba() {
+        std::vector<uint8_t> head(playerHeadTextureSize * playerHeadTextureSize * 4);
+        for (uint32_t y = 0; y < playerHeadTextureSize; ++y) {
+            for (uint32_t x = 0; x < playerHeadTextureSize; ++x) {
+                const uint32_t color = steveFace[(y * 8 / playerHeadTextureSize) * 8 + (x * 8 / playerHeadTextureSize)];
+                auto out = head.data() + ((static_cast<size_t>(y) * playerHeadTextureSize + x) * 4u);
+                out[0] = static_cast<uint8_t>((color >> 16) & 0xFF);
+                out[1] = static_cast<uint8_t>((color >> 8) & 0xFF);
+                out[2] = static_cast<uint8_t>(color & 0xFF);
+                out[3] = 255;
+            }
+        }
+        return head;
+    }
+
+    // Does the skin have its face where every normal skin has it? The game only gives us the skin picture, not the
+    // model, so a skin with a custom model (many marketplace skins) can have the face anywhere, and cutting the
+    // normal spot out of it gives a random piece of the picture. This only says "no" when it is clearly not a normal
+    // skin, so a normal skin is never changed:
+    //  - the face (base layer) is mostly see-through, or
+    //  - the areas that a normal skin leaves empty (top row: left corner, the gap between head top/bottom and hat
+    //    top/bottom, right corner) are full of different colors.
+    bool hasStandardFaceLayout(SkinImage const& image) {
+        const uint32_t s = image.width / 8;
+        auto data = image.bytes.data();
+        if (!data || s == 0) return true;
+        auto alphaAt = [&](uint32_t x, uint32_t y) { return data[((static_cast<size_t>(y) * image.width + x) * 4u) + 3]; };
+        auto colorAt = [&](uint32_t x, uint32_t y) {
+            auto p = data + ((static_cast<size_t>(y) * image.width + x) * 4u);
+            return (static_cast<uint32_t>(p[0]) << 16) | (static_cast<uint32_t>(p[1]) << 8) | p[2];
+        };
+
+        uint32_t seeThrough = 0;
+        for (uint32_t y = s; y < 2 * s; ++y) {
+            for (uint32_t x = s; x < 2 * s; ++x) {
+                if (alphaAt(x, y) < 128) ++seeThrough;
+            }
+        }
+        if (seeThrough * 2 > s * s) return false;
+
+        constexpr uint32_t zones[3][2] = { { 0, 1 }, { 3, 5 }, { 7, 8 } }; // x ranges, in units of s
+        uint32_t total = 0;
+        uint32_t opaque = 0;
+        std::set<uint32_t> colors;
+        for (auto const& zone : zones) {
+            for (uint32_t y = 0; y < s; ++y) {
+                for (uint32_t x = zone[0] * s; x < zone[1] * s; ++x) {
+                    ++total;
+                    if (alphaAt(x, y) >= 128) {
+                        ++opaque;
+                        if (colors.size() < 8) colors.insert(colorAt(x, y));
+                    }
+                }
+            }
+        }
+        // A plain filled background (one or two colors) still counts as normal.
+        return !(opaque * 4 > total && colors.size() > 4);
+    }
+
     std::vector<uint8_t> makePlayerHeadRgba(SDK::SkinImage const& image) {
         if (!image.hasRgbaBytes()) return {};
-        if (image.width < 64 || image.width % 8 != 0) return {};
+        // A skin we can read but can't find a face in gets Steve's.
+        if (image.width < 64 || image.width % 8 != 0) return makeSteveHeadRgba();
 
         auto data = image.bytes.data();
         if (!data) return {};
@@ -48,7 +122,8 @@ namespace {
         uint32_t faceX = sourceHeadSize;
         uint32_t faceY = sourceHeadSize;
         uint32_t overlayX = sourceHeadSize * 5;
-        if (overlayX + sourceHeadSize > image.width || faceY + sourceHeadSize > image.height) return {};
+        if (overlayX + sourceHeadSize > image.width || faceY + sourceHeadSize > image.height) return makeSteveHeadRgba();
+        if (!hasStandardFaceLayout(image)) return makeSteveHeadRgba();
 
         std::vector<uint8_t> head(playerHeadTextureSize * playerHeadTextureSize * 4);
         auto pixel = [&](uint32_t x, uint32_t y) {
@@ -203,7 +278,8 @@ std::string PlayerHeadCache::getTexturePath(SDK::SerializedSkinRef const& skin) 
     auto directory = LatiteTemp::resolvePath("PlayerHeads");
     if (directory.empty()) return {};
 
-    auto path = directory / std::format("head-{:016x}.png", hash);
+    // "v2": heads cut by an older version of the code are not reused.
+    auto path = directory / std::format("head-v2-{:016x}.png", hash);
     std::error_code ec;
     auto size = std::filesystem::file_size(path, ec);
     if (ec || size == 0) {
