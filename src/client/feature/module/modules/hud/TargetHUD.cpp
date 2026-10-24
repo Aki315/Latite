@@ -12,6 +12,7 @@
 #include "mc/common/world/ItemStack.h"
 #include "mc/common/world/ItemStackBase.h"
 #include "mc/common/world/actor/player/Inventory.h"
+#include "mc/common/world/actor/player/Player.h"
 
 #include <algorithm>
 #include <cmath>
@@ -59,6 +60,62 @@ namespace {
         if (!absorption) absorption = map.getInstanceByStride(absorptionId);
         if (sane(absorption)) vitals.absorption = absorption->value;
         return vitals;
+    }
+
+    // ------------------------------------------------------------------------------------------------------------
+    // Armor durability estimate
+    // ------------------------------------------------------------------------------------------------------------
+    // The item name without its namespace: "minecraft:diamond_sword" and "bf:diamond_sword" both give "diamond_sword".
+    std::string shortName(std::string id) {
+        const auto colon = id.find(':');
+        return colon == std::string::npos ? id : id.substr(colon + 1);
+    }
+
+    // Armor points and toughness of one piece. slot: 0 helmet, 1 chestplate, 2 leggings, 3 boots.
+    void armorPoints(std::string const& id, int slot, float& defense, float& toughness) {
+        struct Material {
+            const char* name;
+            int points[4];
+            float toughness;
+        };
+        static constexpr Material kMaterials[] = {
+            { "leather", { 1, 3, 2, 1 }, 0.f },   { "chainmail", { 2, 5, 4, 1 }, 0.f }, { "iron", { 2, 6, 5, 2 }, 0.f },
+            { "golden", { 2, 5, 3, 1 }, 0.f },    { "diamond", { 3, 8, 6, 3 }, 2.f },   { "netherite", { 3, 8, 6, 3 }, 3.f },
+        };
+        const std::string name = shortName(id);
+        for (auto const& m : kMaterials) {
+            if (name.rfind(m.name, 0) == 0) {
+                defense = static_cast<float>(m.points[slot]);
+                toughness = m.toughness;
+                return;
+            }
+        }
+        defense = static_cast<float>(kMaterials[2].points[slot]); // Something unknown: treat it like iron.
+        toughness = 0.f;
+    }
+
+    // Base damage of a held item the way the server's Java PvP rules count it. Returns -1 for items we don't know.
+    // sharpable: swords and axes, the ones that get Sharpness.
+    float weaponBase(std::string const& id, bool& sharpable) {
+        struct Weapon {
+            const char* name;
+            float damage;
+        };
+        static constexpr Weapon kWeapons[] = {
+            { "wooden_sword", 4.f },   { "golden_sword", 4.f },  { "stone_sword", 5.f },  { "iron_sword", 6.f },
+            { "diamond_sword", 7.f },  { "netherite_sword", 8.f }, { "wooden_axe", 7.f },  { "golden_axe", 7.f },
+            { "stone_axe", 9.f },      { "iron_axe", 9.f },      { "diamond_axe", 9.f },  { "netherite_axe", 10.f },
+            { "trident", 8.f },
+        };
+        const std::string name = shortName(id);
+        for (auto const& w : kWeapons) {
+            if (name == w.name) {
+                sharpable = name != "trident";
+                return w.damage;
+            }
+        }
+        sharpable = false;
+        return -1.f;
     }
 
     // ------------------------------------------------------------------------------------------------------------
@@ -294,6 +351,7 @@ namespace {
         float y;
         SDK::ItemStack* stack;
         bool offhand = false;
+        int estDamage = -1; // Estimated durability lost (armor), -1 = go by what the server sent.
     };
 
     struct ItemsRow {
@@ -310,7 +368,7 @@ namespace {
         float cx = x;
         if (f.armorOn) {
             for (int i = 0; i < 4; ++i) {
-                row.slots.push_back({ cx, y, f.info->armor[i] });
+                row.slots.push_back({ cx, y, f.info->armor[i], false, f.info->armorDamage[i] });
                 cx += box + spacing;
             }
             cx -= spacing;
@@ -363,10 +421,17 @@ namespace {
     }
 
     // A thin durability bar along the bottom of a slot, like the inventory's. Only once the item is damaged.
-    // For other players this is the durability their client was last told about.
+    // For other players this is the durability their client was last told about, or the estimate for armor.
     void drawDurabilityBar(Frame& f, Slot const& slot, float box) {
-        const auto durability = durabilityOf(slot.stack);
-        if (!durability || durability->remaining >= durability->maxDamage) return;
+        auto durability = durabilityOf(slot.stack);
+        if (!durability) return;
+        if (slot.estDamage >= 0) {
+            // The estimate never shows more durability than the server said they have.
+            const int lost = std::clamp(std::max(durability->maxDamage - durability->remaining, slot.estDamage), 0,
+                                        durability->maxDamage);
+            durability->remaining = durability->maxDamage - lost;
+        }
+        if (durability->remaining >= durability->maxDamage) return;
 
         const float fraction = static_cast<float>(durability->remaining) / static_cast<float>(durability->maxDamage);
         const float margin = 3.f * f.itemScale;
@@ -917,6 +982,18 @@ TargetHUD::TargetHUD()
     addSetting("showArmorDurability", LocalizeString::get("client.hudmodule.targetHud.showArmorDurability.name"),
                LocalizeString::get("client.hudmodule.targetHud.showArmorDurability.desc"), showArmorDurability,
                "showArmor"_istrue);
+    addSetting("estimateArmor", LocalizeString::get("client.hudmodule.targetHud.estimateArmor.name"),
+               LocalizeString::get("client.hudmodule.targetHud.estimateArmor.desc"), estimateArmor,
+               "showArmorDurability"_istrue);
+    addSetting("assumeProtection", LocalizeString::get("client.hudmodule.targetHud.assumeProtection.name"),
+               LocalizeString::get("client.hudmodule.targetHud.assumeProtection.desc"), assumeProtection,
+               "estimateArmor"_istrue);
+    addSetting("assumeSharpness", LocalizeString::get("client.hudmodule.targetHud.assumeSharpness.name"),
+               LocalizeString::get("client.hudmodule.targetHud.assumeSharpness.desc"), assumeSharpness,
+               "estimateArmor"_istrue);
+    addSetting("assumeUnbreaking", LocalizeString::get("client.hudmodule.targetHud.assumeUnbreaking.name"),
+               LocalizeString::get("client.hudmodule.targetHud.assumeUnbreaking.desc"), assumeUnbreaking,
+               "estimateArmor"_istrue);
     addSetting("showShieldDurability", LocalizeString::get("client.hudmodule.targetHud.showShieldDurability.name"),
                LocalizeString::get("client.hudmodule.targetHud.showShieldDurability.desc"), showShieldDurability,
                "showOffhand"_istrue);
@@ -964,10 +1041,102 @@ void TargetHUD::afterLoadConfig() {
     storePos(screenSize);
 }
 
+void TargetHUD::updateArmorEstimate(float totalHealth, TargetInfo& info) {
+    if (guessFor != info.id) {
+        for (auto& g : armorGuess) g = {};
+        guessFor = info.id;
+        guessLastHealth = -1.f;
+    }
+
+    // Keep each piece's starting point in sync with what the server told us.
+    float defense = 0.f, toughness = 0.f;
+    int pieces = 0;
+    for (int i = 0; i < 4; ++i) {
+        auto& g = armorGuess[i];
+        auto* item = info.armor[i] ? info.armor[i]->getItem() : nullptr;
+        const int maxDamage = item ? item->getMaxDamage() : 0;
+        if (maxDamage <= 0 || !Signatures::ItemStackBase_getDamageValue.result) {
+            g = {};
+            continue;
+        }
+
+        const int server = std::clamp(static_cast<int>(info.armor[i]->getDamageValue()), 0, maxDamage);
+        const std::string id = item->namespacedId.getString();
+        if (!g.known || g.id != id || server < g.lastServerDamage) {
+            // A new piece (or a repaired one): start over.
+            g.known = true;
+            g.id = id;
+            g.baseDamage = server;
+            g.wear = 0.f;
+        } else if (server > g.lastServerDamage) {
+            // The server sent newer numbers: trust them over the guess.
+            g.baseDamage = server;
+            g.wear = 0.f;
+        }
+        g.lastServerDamage = server;
+        g.maxDamage = maxDamage;
+
+        float d = 0.f, t = 0.f;
+        armorPoints(id, i, d, t);
+        defense += d;
+        toughness += t;
+        ++pieces;
+    }
+
+    // Did one of your hits just land? (health + golden hearts went down shortly after you swung)
+    const float previous = guessLastHealth;
+    guessLastHealth = totalHealth;
+    const float seconds = std::chrono::duration<float>(std::chrono::steady_clock::now() - lastHit).count();
+    const float drop = previous - totalHealth;
+    if (pieces > 0 && previous >= 0.f && totalHealth >= 0.f && drop >= 0.3f && seconds <= 1.f) {
+        // How much of a hit gets through their armor: armor points, then Protection.
+        const float protection = std::get<BoolValue>(assumeProtection) ? 1.f - std::min(20.f, 4.f * pieces) * 0.04f : 1.f;
+        auto getsThrough = [&](float raw) {
+            const float reduction =
+                std::clamp(std::max(defense / 5.f, defense - raw / (2.f + toughness / 4.f)), 0.f, 20.f) / 25.f;
+            return std::max(0.03f, (1.f - reduction) * protection);
+        };
+
+        float raw;
+        if (lastWeaponBase >= 0.f) {
+            // We know the weapon: its damage (plus Sharpness V = +3). A weak swing or a block shows up as a smaller
+            // drop than expected, so scale down by that. Never scale up, the target may have no Protection at all.
+            raw = lastWeaponBase + (lastWeaponSharpable && std::get<BoolValue>(assumeSharpness) ? 3.f : 0.f);
+            const float expected = raw * getsThrough(raw);
+            raw *= std::clamp(drop / expected, 0.2f, 1.f);
+        } else {
+            // Unknown weapon: work back from how much health it took.
+            raw = drop * 3.f;
+            for (int k = 0; k < 4; ++k) raw = std::min(40.f, drop / getsThrough(raw));
+        }
+
+        const int perPiece = std::max(1, static_cast<int>(std::floor(raw / 4.f)));
+        const float kept = std::get<BoolValue>(assumeUnbreaking) ? 0.7f : 1.f; // Unbreaking III: 30% of the wear is ignored.
+        for (auto& g : armorGuess) {
+            if (g.known) g.wear += static_cast<float>(perPiece) * kept;
+        }
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        auto const& g = armorGuess[i];
+        if (!g.known || !info.armor[i]) continue;
+        info.armorDamage[i] = std::clamp(g.baseDamage + static_cast<int>(std::lround(g.wear)), 0, g.maxDamage);
+    }
+}
+
 void TargetHUD::onAttack(Event& evG) {
     auto& ev = reinterpret_cast<AttackEvent&>(evG);
     auto* actor = ev.getActor();
     if (!actor || !actor->isPlayer()) return;
+
+    // What you hit with, for the armor durability estimate.
+    lastWeaponBase = 1.f; // Bare hand.
+    lastWeaponSharpable = false;
+    if (auto* me = SDK::ClientInstance::get()->getLocalPlayer(); me && me->supplies && me->supplies->inventory) {
+        auto* held = me->supplies->inventory->getItem(me->supplies->selectedSlot);
+        auto* item = held ? held->getItem() : nullptr;
+        if (item) lastWeaponBase = weaponBase(item->namespacedId.getString(), lastWeaponSharpable);
+    }
 
     targetId = actor->getRuntimeID();
     lastHit = std::chrono::steady_clock::now();
@@ -1055,6 +1224,9 @@ bool TargetHUD::gatherInfo(bool preview, TargetInfo& info) {
             for (int slot = 0; slot < 4; ++slot) {
                 auto* stack = actor->getArmor(slot);
                 if (stack && stack->getItem()) info.armor[slot] = stack;
+            }
+            if (std::get<BoolValue>(estimateArmor)) {
+                updateArmorEstimate(vitals.health < 0.f ? -1.f : vitals.health + vitals.absorption, info);
             }
         }
         if (equipment->handContainer) {

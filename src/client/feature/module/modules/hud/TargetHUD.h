@@ -12,6 +12,7 @@ struct TargetInfo {
     float absorption = 0.f;
     std::string faceTexturePath;
     SDK::ItemStack* armor[4] {};
+    int armorDamage[4] { -1, -1, -1, -1 }; // Estimated durability lost per armor piece, -1 = no estimate.
     SDK::ItemStack* offhand = nullptr;
     uint64_t id = 0;      // The player's runtime id, 0 for the editor preview.
     float opacity = 1.f;  // Fades from 1 to 0 over the last moments before the HUD goes away.
@@ -53,9 +54,13 @@ private:
     ValueType duration = FloatValue(5.f);
     ValueType showArmor = BoolValue(true);
     ValueType showOffhand = BoolValue(true);
-    // Durability bars are separate for armor and for the offhand item (a shield). The armor value is only what the
-    // server last sent, so it starts off; a better estimate comes later.
-    ValueType showArmorDurability = BoolValue(false);
+    // Durability bars are separate for armor and for the offhand item (a shield). What the server sends about other
+    // players' armor can be out of date, so the armor bar can use an estimate built from the hits you land.
+    ValueType showArmorDurability = BoolValue(true);
+    ValueType estimateArmor = BoolValue(true);
+    ValueType assumeProtection = BoolValue(true);  // They wear Protection IV (4 on each piece).
+    ValueType assumeSharpness = BoolValue(true);   // Your sword or axe has Sharpness V.
+    ValueType assumeUnbreaking = BoolValue(false); // Their armor has Unbreaking III.
     ValueType showShieldDurability = BoolValue(true);
     static constexpr int ShieldNumberRemaining = 0; // 312
     static constexpr int ShieldNumberPercent = 1;   // 93%
@@ -79,6 +84,23 @@ private:
     float shownFraction = 1.f;
     uint64_t shownFor = 0;
     std::chrono::steady_clock::time_point lastFrame {};
+
+    // The armor durability guess for the current target. It starts from what the server sent and then adds the wear
+    // from every hit you land: each hit wears every armor piece by max(1, floor(damage / 4)).
+    struct ArmorGuess {
+        bool known = false;
+        std::string id;
+        int maxDamage = 0;
+        int lastServerDamage = 0;
+        int baseDamage = 0; // What the server last said, the guess builds on this.
+        float wear = 0.f;   // Extra durability lost since then, from the hits.
+    };
+    ArmorGuess armorGuess[4];
+    uint64_t guessFor = 0;
+    float guessLastHealth = -1.f;
+    float lastWeaponBase = -1.f;   // Base damage of what you swung at the last hit, -1 = unknown weapon.
+    bool lastWeaponSharpable = false;
+    void updateArmorEstimate(float totalHealth, TargetInfo& info);
 
     SDK::Actor* findTarget() const;
     bool gatherInfo(bool preview, TargetInfo& out);
