@@ -3,6 +3,45 @@
 #include "mc/common/client/renderer/MeshUtils.h"
 #include <mc/common/client/renderer/Tessellator.h>
 
+#include <algorithm>
+#include <cmath>
+
+namespace {
+    // About how wide one screen pixel is, in blocks, per block of distance (roughly a 70 degree fov at 1080p).
+    constexpr float kBlocksPerPixelPerBlock = 0.0015f;
+
+    Vec3 cross(Vec3 const& a, Vec3 const& b) {
+        return { a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x };
+    }
+
+    // The four corners of a flat strip along a -> b that faces the camera. Its width is the same number of screen
+    // pixels everywhere, so it is scaled with the distance to the camera at each end. Returns false for a line
+    // that has no length.
+    bool makeStrip(Vec3 const& a, Vec3 const& b, Vec3 const& camera, float pixels, Vec3 (&out)[4]) {
+        const Vec3 dir = b - a;
+        const float len = dir.magnitude();
+        if (len < 1e-5f) return false;
+
+        const Vec3 toCamera = camera - (a + b) * 0.5f;
+        Vec3 side = cross(dir, toCamera);
+        if (side.magnitude() < 1e-3f * len * std::max(toCamera.magnitude(), 1e-3f)) {
+            // The line points straight at the camera, so any direction across it will do.
+            const Vec3 helper = std::fabs(dir.y) < 0.9f * len ? Vec3(0.f, 1.f, 0.f) : Vec3(1.f, 0.f, 0.f);
+            side = cross(dir, helper);
+        }
+        side = side.normalized();
+
+        const float halfA = pixels * std::max(a.distance(camera), 0.5f) * kBlocksPerPixelPerBlock * 0.5f;
+        const float halfB = pixels * std::max(b.distance(camera), 0.5f) * kBlocksPerPixelPerBlock * 0.5f;
+
+        out[0] = a - side * halfA;
+        out[1] = a + side * halfA;
+        out[2] = b + side * halfB;
+        out[3] = b - side * halfB;
+        return true;
+    }
+} // namespace
+
 MCDrawUtil3D::MCDrawUtil3D(SDK::LevelRenderer* renderer, SDK::ScreenContext* ctx, SDK::MaterialPtr* material)
     : levelRenderer(renderer)
     , screenContext(ctx)
@@ -12,7 +51,20 @@ MCDrawUtil3D::MCDrawUtil3D(SDK::LevelRenderer* renderer, SDK::ScreenContext* ctx
     }
 }
 
+void MCDrawUtil3D::drawThickLine(Vec3 const& p1, Vec3 const& p2, d2d::Color const& color) {
+    Vec3 strip[4];
+    const Vec3 camera = levelRenderer->getLevelRendererPlayer()->getOrigin();
+    if (!makeStrip(p1, p2, camera, lineThickness, strip)) return;
+    fillQuad(strip[0], strip[1], strip[2], strip[3], color);
+}
+
 void MCDrawUtil3D::drawLine(Vec3 const& p1, Vec3 const& p2, d2d::Color const& color, bool immediate) {
+    if (lineThickness > 1.01f) {
+        drawThickLine(p1, p2, color);
+        if (immediate) flush();
+        return;
+    }
+
     auto scn = screenContext;
     auto tess = scn->tess;
     *scn->shaderColor = { 1.f, 1.f, 1.f, 1.f };
@@ -35,6 +87,14 @@ void MCDrawUtil3D::drawLine(Vec3 const& p1, Vec3 const& p2, d2d::Color const& co
 }
 
 void MCDrawUtil3D::drawQuad(Vec3 a, Vec3 b, Vec3 c, Vec3 d, d2d::Color const& col) {
+    if (lineThickness > 1.01f) {
+        drawThickLine(a, b, col);
+        drawThickLine(b, c, col);
+        drawThickLine(c, d, col);
+        drawThickLine(d, a, col);
+        return;
+    }
+
     auto scn = screenContext;
     auto tess = scn->tess;
     *scn->shaderColor = { 1.f, 1.f, 1.f, 1.f };
