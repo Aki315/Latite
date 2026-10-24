@@ -582,6 +582,8 @@
         "client.module.hitboxes.widthScale.desc": "Visual width multiplier of the hitbox (1.0 = real size). Does not change the real hitbox.",
         "client.module.hitboxes.heightScale.name": "Height Scale",
         "client.module.hitboxes.heightScale.desc": "Visual height multiplier of the hitbox (1.0 = real size). Does not change the real hitbox.",
+        "client.module.hitboxes.lineThickness.name": "Line Thickness",
+        "client.module.hitboxes.lineThickness.desc": "How thick the lines of the hitbox, eye line and looking-at line are, in pixels. 1 is the normal thin line.",
         "client.module.hitboxes.showEyeLine.name": "Show Eye Line",
         "client.module.hitboxes.eyeLine.name": "Eye Line",
         "client.module.hitboxes.showLookingAt.name": "Show Looking At",
