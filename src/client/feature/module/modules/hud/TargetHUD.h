@@ -62,6 +62,7 @@ private:
     static constexpr int ShieldNumberOff = 2;
     EnumData shieldNumber;
     ValueType showAbsorption = BoolValue(true);
+    ValueType heartSize = FloatValue(2.f); // Size of one heart pixel; 2 = the original size. Whole numbers keep it crisp.
     ValueType itemSize = FloatValue(1.3f); // Size of the armor, offhand and item icons; 1 = the original size.
     ValueType textSize = FloatValue(20.f);
     ValueType textColor = ColorValue(1.f, 1.f, 1.f, 1.f);

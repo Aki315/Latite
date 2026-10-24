@@ -107,6 +107,7 @@ namespace {
         bool shieldPercent = false;  // ... as a percent instead of the points left
         float labelSize = 12.f;
         float itemScale = 1.f;       // Item icon size multiplier from the Item Size setting.
+        float heartPx = 2.f;         // Size of one heart pixel from the Heart Size setting.
         float labelW = 0.f;          // Room reserved for the number, so the layout never jumps.
         std::wstring shieldText;
         d2d::Color shieldColor = d2d::Color(1.f, 1.f, 1.f, 1.f);
@@ -457,7 +458,10 @@ namespace {
         float width = 0.f;
     };
 
-    HeartsRow heartsRow(Frame& f, float px = kHeartPx) {
+    // ratio: 1 = the size from the Heart Size setting, 0.5 = half of it (the Tag design keeps its hearts small).
+    // Rounded to whole pixels so the hearts stay crisp, and never below 1.
+    HeartsRow heartsRow(Frame& f, float ratio = 1.f) {
+        const float px = std::max(1.f, std::round(f.heartPx * ratio));
         HeartsRow hr;
         hr.red = heartCount(f.info->maxHealth);
         hr.gold = (f.goldPoints + 1) / 2;
@@ -701,7 +705,7 @@ namespace {
         const Vec2 goldBox = f.goldText.empty() ? Vec2 { 0.f, 0.f } : measure(f, f.goldText, numSize);
         const ItemsRow probe = itemsRow(f, 0.f, 0.f, box, 3.f, 6.f);
         const bool hasItems = !probe.slots.empty();
-        const HeartsRow hr = heartsRow(f, 1.f); // Small hearts, to keep the tag slim.
+        const HeartsRow hr = heartsRow(f, 0.5f); // Small hearts, to keep the tag slim.
         const int kind = graphicKind(f, hr);
         const float graphicW = kind == 1 ? barW : (kind == 2 ? hr.width : 0.f);
 
@@ -886,6 +890,9 @@ TargetHUD::TargetHUD()
                                   LocalizeString::get("client.hudmodule.targetHud.unit.hearts.desc")));
     addEnumSetting("numberUnit", LocalizeString::get("client.hudmodule.targetHud.unit.name"),
                    LocalizeString::get("client.hudmodule.targetHud.unit.desc"), numberUnit);
+    addSliderSetting("heartSize", LocalizeString::get("client.hudmodule.targetHud.heartSize.name"),
+                     LocalizeString::get("client.hudmodule.targetHud.heartSize.desc"), heartSize, FloatValue(1.f),
+                     FloatValue(6.f), FloatValue(1.f));
     addSliderSetting("decimals", LocalizeString::get("client.hudmodule.targetHud.decimals.name"),
                      LocalizeString::get("client.hudmodule.targetHud.decimals.desc"), decimals, FloatValue(0.f),
                      FloatValue(2.f), FloatValue(1.f));
@@ -1078,6 +1085,7 @@ void TargetHUD::render(DrawUtil& dc, bool isDefault, bool inEditor) {
     f.shieldNumberOn = f.shieldBarOn && shieldKey != ShieldNumberOff;
     f.shieldPercent = shieldKey == ShieldNumberPercent;
     f.itemScale = std::get<FloatValue>(itemSize).value;
+    f.heartPx = std::get<FloatValue>(heartSize).value;
     f.labelSize = f.textSize * 0.6f * f.itemScale;
 
     f.bg = d2d::Color(std::get<ColorValue>(backgroundColor).getMainColor());
