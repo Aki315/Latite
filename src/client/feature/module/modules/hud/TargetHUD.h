@@ -13,6 +13,8 @@ struct TargetInfo {
     std::string faceTexturePath;
     SDK::ItemStack* armor[4] {};
     SDK::ItemStack* offhand = nullptr;
+    uint64_t id = 0;      // The player's runtime id, 0 for the editor preview.
+    float opacity = 1.f;  // Fades from 1 to 0 over the last moments before the HUD goes away.
 };
 
 // Shows the player you just hit: head, name, health (colored green > yellow > red as it drops), golden hearts,
@@ -71,6 +73,11 @@ private:
     uint64_t targetId = 0;
     bool hasTarget = false;
     std::chrono::steady_clock::time_point lastHit {};
+
+    // The health bar and ring ease toward the real value instead of jumping.
+    float shownFraction = 1.f;
+    uint64_t shownFor = 0;
+    std::chrono::steady_clock::time_point lastFrame {};
 
     SDK::Actor* findTarget() const;
     bool gatherInfo(bool preview, TargetInfo& out);

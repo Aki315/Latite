@@ -74,7 +74,8 @@ namespace {
         return s;
     }
 
-    d2d::Color alpha(d2d::Color const& c, float a) { return d2d::Color(c.r, c.g, c.b, a); }
+    // The same colour with its alpha multiplied by `factor`.
+    d2d::Color alpha(d2d::Color const& c, float factor) { return d2d::Color(c.r, c.g, c.b, c.a * factor); }
 
     d2d::Color mix(d2d::Color const& a, d2d::Color const& b, float t) {
         t = std::clamp(t, 0.f, 1.f);
@@ -126,7 +127,11 @@ namespace {
         std::wstring healthMax;    // "20"
         std::wstring healthText;   // "14/20"
         std::wstring goldText;     // "+4" (empty without golden hearts)
+        float opacity = 1.f;       // Everything fades out with this at the end of the timer.
     };
+
+    // A colour that is drawn directly (not taken from the Frame) still has to fade with everything else.
+    d2d::Color fade(Frame const& f, d2d::Color const& color) { return alpha(color, f.opacity); }
 
     // ------------------------------------------------------------------------------------------------------------
     // Text
@@ -207,7 +212,7 @@ namespace {
 
         if (!haveTexture) {
             // No skin yet: a plain dark shape.
-            fillRound(f, box, radius, d2d::Color::RGB(30, 36, 52));
+            fillRound(f, box, radius, fade(f, d2d::Color::RGB(30, 36, 52)));
             return;
         }
 
@@ -233,7 +238,7 @@ namespace {
                                        { (x1 - x0) * gs, (y1 - y0) * gs }, { x0 / w, y0 / h },
                                        { (x1 - x0) / w, (y1 - y0) / h });
         }
-        f.mc->renderCtx->flushImages(d2d::Colors::WHITE, 1.f, SDK::HashedString("ui_textured_and_glcolor_sprite"));
+        f.mc->renderCtx->flushImages(fade(f, d2d::Colors::WHITE), 1.f, SDK::HashedString("ui_textured_and_glcolor_sprite"));
     }
 
     // A smooth pill-shaped bar: dark track, fill in the health colour. Optional quarter ticks.
@@ -368,8 +373,8 @@ namespace {
         const float x1 = slot.x + box - margin;
         const float y1 = slot.y + box - margin;
         const float y0 = y1 - 2.5f * f.itemScale;
-        f.mc->fillRectangle({ x0, y0, x1, y1 }, d2d::Color(0.f, 0.f, 0.f, 0.75f));
-        f.mc->fillRectangle({ x0, y0, x0 + (x1 - x0) * fraction, y1 }, healthGradient(fraction));
+        f.mc->fillRectangle({ x0, y0, x1, y1 }, fade(f, d2d::Color(0.f, 0.f, 0.f, 0.75f)));
+        f.mc->fillRectangle({ x0, y0, x0 + (x1 - x0) * fraction, y1 }, fade(f, healthGradient(fraction)));
     }
 
     // Draws the items. Call after everything else, the item renderer changes render state.
@@ -379,10 +384,10 @@ namespace {
         for (auto const& slot : row.slots) {
             if (!slot.stack || !slot.stack->getItem()) continue;
 
-            f.mc->drawItem(slot.stack, { slot.x + inset, slot.y + inset }, icon / 48.f, 1.f);
+            f.mc->drawItem(slot.stack, { slot.x + inset, slot.y + inset }, icon / 48.f, f.opacity);
             if (slot.offhand ? f.shieldBarOn : f.armorBarOn) drawDurabilityBar(f, slot, box);
             if (slot.stack->itemCount > 1) {
-                putText(f, slot.x, slot.y, box - 1.f, box, std::to_wstring(slot.stack->itemCount), d2d::Colors::WHITE,
+                putText(f, slot.x, slot.y, box - 1.f, box, std::to_wstring(slot.stack->itemCount), fade(f, d2d::Colors::WHITE),
                         13.f * f.itemScale, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_PARAGRAPH_ALIGNMENT_FAR);
             }
         }
@@ -410,10 +415,10 @@ namespace {
 
     // lit: 0 = empty, 1 = half (left side coloured), 2 = full.
     void drawHeart(Frame& f, float x, float y, int lit, bool gold, float px = kHeartPx) {
-        const d2d::Color outline = d2d::Color::RGB(25, 8, 10);
-        const d2d::Color empty = d2d::Color::RGB(58, 62, 78);
-        const d2d::Color filled = gold ? d2d::Color::RGB(247, 190, 25) : d2d::Color::RGB(226, 55, 65);
-        const d2d::Color shine = gold ? d2d::Color::RGB(255, 240, 160) : d2d::Color::RGB(255, 170, 175);
+        const d2d::Color outline = fade(f, d2d::Color::RGB(25, 8, 10));
+        const d2d::Color empty = fade(f, d2d::Color::RGB(58, 62, 78));
+        const d2d::Color filled = fade(f, gold ? d2d::Color::RGB(247, 190, 25) : d2d::Color::RGB(226, 55, 65));
+        const d2d::Color shine = fade(f, gold ? d2d::Color::RGB(255, 240, 160) : d2d::Color::RGB(255, 170, 175));
         const float left = std::round(x);
         const float top = std::round(y);
         auto litAt = [&](int c) { return lit == 2 || (lit == 1 && c < kHeartCols / 2); };
@@ -846,6 +851,7 @@ TargetHUD::TargetHUD()
                 LocalizeString::get("client.hudmodule.targetHud.desc"), HUD) {
     showPreview = false;
 
+    // ---- Look ----
     design.addEntry(EnumEntry(DesignPill, LocalizeString::get("client.hudmodule.targetHud.design.pill.name"),
                               LocalizeString::get("client.hudmodule.targetHud.design.pill.desc")));
     design.addEntry(EnumEntry(DesignHearts, LocalizeString::get("client.hudmodule.targetHud.design.hearts.name"),
@@ -858,7 +864,11 @@ TargetHUD::TargetHUD()
                               LocalizeString::get("client.hudmodule.targetHud.design.sideBar.desc")));
     addEnumSetting("design", LocalizeString::get("client.hudmodule.targetHud.design.name"),
                    LocalizeString::get("client.hudmodule.targetHud.design.desc"), design);
+    addSliderSetting("duration", LocalizeString::get("client.hudmodule.targetHud.duration.name"),
+                     LocalizeString::get("client.hudmodule.targetHud.duration.desc"), duration, FloatValue(1.f),
+                     FloatValue(15.f), FloatValue(0.5f));
 
+    // ---- Health ----
     healthDisplay.addEntry(EnumEntry(DisplayDefault, LocalizeString::get("client.hudmodule.targetHud.display.default.name"),
                                      LocalizeString::get("client.hudmodule.targetHud.display.default.desc")));
     healthDisplay.addEntry(EnumEntry(DisplayBar, LocalizeString::get("client.hudmodule.targetHud.display.bar.name"),
@@ -879,10 +889,15 @@ TargetHUD::TargetHUD()
     addSliderSetting("decimals", LocalizeString::get("client.hudmodule.targetHud.decimals.name"),
                      LocalizeString::get("client.hudmodule.targetHud.decimals.desc"), decimals, FloatValue(0.f),
                      FloatValue(2.f), FloatValue(1.f));
+    addSetting("showAbsorption", LocalizeString::get("client.hudmodule.targetHud.showAbsorption.name"),
+               LocalizeString::get("client.hudmodule.targetHud.showAbsorption.desc"), showAbsorption);
+    addSetting("colorByHealth", LocalizeString::get("client.hudmodule.targetHud.colorByHealth.name"),
+               LocalizeString::get("client.hudmodule.targetHud.colorByHealth.desc"), colorByHealth);
+    addSetting("healthColor", LocalizeString::get("client.hudmodule.targetHud.healthColor.name"),
+               LocalizeString::get("client.hudmodule.targetHud.healthColor.desc"), healthColor,
+               "colorByHealth"_isfalse);
 
-    addSliderSetting("duration", LocalizeString::get("client.hudmodule.targetHud.duration.name"),
-                     LocalizeString::get("client.hudmodule.targetHud.duration.desc"), duration, FloatValue(1.f),
-                     FloatValue(15.f), FloatValue(0.5f));
+    // ---- Armor and offhand ----
     addSetting("showArmor", LocalizeString::get("client.hudmodule.targetHud.showArmor.name"),
                LocalizeString::get("client.hudmodule.targetHud.showArmor.desc"), showArmor);
     addSetting("showOffhand", LocalizeString::get("client.hudmodule.targetHud.showOffhand.name"),
@@ -891,9 +906,11 @@ TargetHUD::TargetHUD()
                      LocalizeString::get("client.hudmodule.targetHud.itemSize.desc"), itemSize, FloatValue(0.75f),
                      FloatValue(2.5f), FloatValue(0.05f));
     addSetting("showArmorDurability", LocalizeString::get("client.hudmodule.targetHud.showArmorDurability.name"),
-               LocalizeString::get("client.hudmodule.targetHud.showArmorDurability.desc"), showArmorDurability);
+               LocalizeString::get("client.hudmodule.targetHud.showArmorDurability.desc"), showArmorDurability,
+               "showArmor"_istrue);
     addSetting("showShieldDurability", LocalizeString::get("client.hudmodule.targetHud.showShieldDurability.name"),
-               LocalizeString::get("client.hudmodule.targetHud.showShieldDurability.desc"), showShieldDurability);
+               LocalizeString::get("client.hudmodule.targetHud.showShieldDurability.desc"), showShieldDurability,
+               "showOffhand"_istrue);
     shieldNumber.addEntry(EnumEntry(ShieldNumberRemaining,
                                     LocalizeString::get("client.hudmodule.targetHud.shieldNumber.remaining.name"),
                                     LocalizeString::get("client.hudmodule.targetHud.shieldNumber.remaining.desc")));
@@ -905,16 +922,11 @@ TargetHUD::TargetHUD()
     addEnumSetting("shieldNumber", LocalizeString::get("client.hudmodule.targetHud.shieldNumber.name"),
                    LocalizeString::get("client.hudmodule.targetHud.shieldNumber.desc"), shieldNumber,
                    "showShieldDurability"_istrue);
-    addSetting("showAbsorption", LocalizeString::get("client.hudmodule.targetHud.showAbsorption.name"),
-               LocalizeString::get("client.hudmodule.targetHud.showAbsorption.desc"), showAbsorption);
+
+    // ---- Text and colors ----
     addSliderSetting("textSize", LocalizeString::get("client.hudmodule.targetHud.textSize.name"),
                      LocalizeString::get("client.hudmodule.targetHud.textSize.desc"), textSize, FloatValue(12.f),
                      FloatValue(36.f), FloatValue(1.f));
-    addSetting("colorByHealth", LocalizeString::get("client.hudmodule.targetHud.colorByHealth.name"),
-               LocalizeString::get("client.hudmodule.targetHud.colorByHealth.desc"), colorByHealth);
-    addSetting("healthColor", LocalizeString::get("client.hudmodule.targetHud.healthColor.name"),
-               LocalizeString::get("client.hudmodule.targetHud.healthColor.desc"), healthColor,
-               "colorByHealth"_isfalse);
     addSetting("textColor", LocalizeString::get("client.hudmodule.targetHud.textColor.name"),
                LocalizeString::get("client.hudmodule.targetHud.textColor.desc"), textColor);
     addSetting("backgroundColor", LocalizeString::get("client.hudmodule.targetHud.backgroundColor.name"),
@@ -1005,16 +1017,21 @@ bool TargetHUD::gatherInfo(bool preview, TargetInfo& info) {
 
     if (!hasTarget) return false;
 
-    const auto elapsed = std::chrono::steady_clock::now() - lastHit;
-    if (elapsed > std::chrono::duration<float>(std::get<FloatValue>(duration).value)) {
+    const float visibleSeconds = std::get<FloatValue>(duration).value;
+    const float elapsed = std::chrono::duration<float>(std::chrono::steady_clock::now() - lastHit).count();
+    if (elapsed > visibleSeconds) {
         hasTarget = false;
         return false;
     }
+    // Fade out over the last moments, so it does not just vanish.
+    constexpr float fadeSeconds = 0.4f;
+    info.opacity = std::clamp((visibleSeconds - elapsed) / fadeSeconds, 0.f, 1.f);
 
     SDK::Actor* actor = findTarget();
     if (!actor || !actor->isPlayer()) return false;
 
     auto* player = static_cast<SDK::Player*>(actor);
+    info.id = actor->getRuntimeID();
     info.name = player->playerName.empty() ? L"Player" : util::StrToWStr(player->playerName);
     info.faceTexturePath = getFaceTexturePath(player);
 
@@ -1075,6 +1092,21 @@ void TargetHUD::render(DrawUtil& dc, bool isDefault, bool inEditor) {
     f.maxPoints = std::max(1, static_cast<int>(std::ceil(info.maxHealth)));
     f.healthPoints = known ? std::clamp(static_cast<int>(std::ceil(info.health)), 0, f.maxPoints) : 0;
     f.fraction = known ? std::clamp(info.health / std::max(info.maxHealth, 1.f), 0.f, 1.f) : 0.f;
+
+    // The bar, the ring and the colour ease toward the real health, so a hit slides instead of jumping.
+    // Hearts and numbers stay exact. A new target, or coming back after a pause, starts at its real value.
+    if (info.id != 0) {
+        const auto now = std::chrono::steady_clock::now();
+        const float sinceLast = std::chrono::duration<float>(now - lastFrame).count();
+        lastFrame = now;
+        if (shownFor != info.id || sinceLast > 0.5f) {
+            shownFraction = f.fraction;
+            shownFor = info.id;
+        } else {
+            shownFraction += (f.fraction - shownFraction) * std::min(1.f, sinceLast * 10.f);
+        }
+        f.fraction = shownFraction;
+    }
     if (!known) {
         f.health = f.dim;
     } else if (std::get<BoolValue>(colorByHealth)) {
@@ -1119,6 +1151,12 @@ void TargetHUD::render(DrawUtil& dc, bool isDefault, bool inEditor) {
         f.display = design.getSelectedKey() == DesignHearts ? 2 : 1;
     } else {
         f.display = displayKey; // DisplayBar = 1, DisplayHearts = 2, DisplayNumber = 3
+    }
+
+    // Fade everything out at the end of the timer. Colours drawn directly use f.opacity themselves.
+    f.opacity = info.opacity;
+    for (d2d::Color* color : { &f.bg, &f.text, &f.dim, &f.health, &f.gold, &f.faint, &f.track, &f.shieldColor }) {
+        color->a *= f.opacity;
     }
 
     // Shapes are drawn straight away; the text is queued and drawn by the final flush, on top of everything.
