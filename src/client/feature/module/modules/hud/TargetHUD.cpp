@@ -439,7 +439,9 @@ namespace {
                 while (end < kHeartCols && kHeart[r][end] == ch && litAt(end) == on) ++end;
 
                 const d2d::Color color = ch == 'O' ? outline : (ch == 'R' ? (on ? filled : empty) : (on ? shine : empty));
-                f.mc->fillRectangle({ left + c * px, top + r * px, left + end * px, top + (r + 1) * px }, color);
+                // Each edge is snapped to a whole screen pixel, so sizes like 1.5 or 2.5 don't leave seams or blur.
+                f.mc->fillRectangle({ std::round(left + c * px), std::round(top + r * px),
+                                      std::round(left + end * px), std::round(top + (r + 1) * px) }, color);
                 c = end;
             }
         }
@@ -452,16 +454,16 @@ namespace {
         int red = 0;
         int gold = 0;
         bool usable = false; // false when there are too many hearts for one row
-        float px = kHeartPx; // Size of one heart pixel; a whole number keeps the hearts crisp.
+        float px = kHeartPx; // Size of one heart pixel (decimals allowed).
         float pitch = kHeartPitch;
         float height = kHeartHeight;
         float width = 0.f;
     };
 
     // ratio: 1 = the size from the Heart Size setting, 0.5 = half of it (the Tag design keeps its hearts small).
-    // Rounded to whole pixels so the hearts stay crisp, and never below 1.
+    // Decimals like 1.5 or 2.5 are fine (the rectangle edges are snapped to the pixel grid when drawing); never below 0.5.
     HeartsRow heartsRow(Frame& f, float ratio = 1.f) {
-        const float px = std::max(1.f, std::round(f.heartPx * ratio));
+        const float px = std::max(0.5f, f.heartPx * ratio);
         HeartsRow hr;
         hr.red = heartCount(f.info->maxHealth);
         hr.gold = (f.goldPoints + 1) / 2;
@@ -891,8 +893,8 @@ TargetHUD::TargetHUD()
     addEnumSetting("numberUnit", LocalizeString::get("client.hudmodule.targetHud.unit.name"),
                    LocalizeString::get("client.hudmodule.targetHud.unit.desc"), numberUnit);
     addSliderSetting("heartSize", LocalizeString::get("client.hudmodule.targetHud.heartSize.name"),
-                     LocalizeString::get("client.hudmodule.targetHud.heartSize.desc"), heartSize, FloatValue(1.f),
-                     FloatValue(6.f), FloatValue(1.f));
+                     LocalizeString::get("client.hudmodule.targetHud.heartSize.desc"), heartSize, FloatValue(0.5f),
+                     FloatValue(6.f), FloatValue(0.1f));
     addSliderSetting("decimals", LocalizeString::get("client.hudmodule.targetHud.decimals.name"),
                      LocalizeString::get("client.hudmodule.targetHud.decimals.desc"), decimals, FloatValue(0.f),
                      FloatValue(2.f), FloatValue(1.f));

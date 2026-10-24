@@ -24,6 +24,11 @@ private:
     ValueType widthScale = FloatValue(1.3f);
     ValueType heightScale = FloatValue(1.1f);
 
+    // Boxes further away than this are not drawn (0 = no limit). With the shrink option on, the width/height scale
+    // above fades back to 1.0 (the real size) the closer a box gets to this distance, so far boxes aren't oversized.
+    ValueType maxDistance = FloatValue(64.f);
+    ValueType shrinkWithDistance = BoolValue(true);
+
     // Thickness of every line that is drawn, in screen pixels (1 = the game's thin line).
     ValueType lineThickness = FloatValue(1.f);
 
@@ -42,8 +47,7 @@ private:
     ValueType localPlayer = BoolValue(true);
     ValueType items = BoolValue(true);
 
-    // Projectiles whose hitbox is not drawn at all.
-    ValueType hideArrows = BoolValue(true);
-    ValueType hideWindCharges = BoolValue(true);
-    ValueType hidePearls = BoolValue(true);
+    // Hides the hitbox of everything that is not a player or a mob: projectiles (arrows, ender pearls, wind charges,
+    // snowballs, ...), boats, minecarts, armor stands, XP orbs, TNT, falling blocks and so on.
+    ValueType hideEntities = BoolValue(true);
 };

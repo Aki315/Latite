@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string_view>
 
 namespace {
     // How far a point is from the closest point of a box (0 when the point is inside it).
@@ -14,6 +15,22 @@ namespace {
         const float dy = p.y - std::clamp(p.y, bb.lower.y, bb.higher.y);
         const float dz = p.z - std::clamp(p.z, bb.lower.z, bb.higher.z);
         return std::sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    // Things that are neither a player nor a mob. Matched on the entity's name (minecraft:<name>), so it does not
+    // depend on the build-specific numeric entity ids.
+    bool isNonMobEntity(std::string const& type) {
+        static constexpr std::string_view kNames[] = {
+            "arrow", "trident", "snowball", "egg", "ender_pearl", "wind_charge", "fireball", "wither_skull",
+            "fishing_hook", "xp_orb", "xp_bottle", "potion", "boat", "minecart", "armor_stand", "tnt",
+            "falling_block", "painting", "item_frame", "leash_knot", "ender_crystal", "firework", "lightning_bolt",
+            "evocation_fang", "shulker_bullet", "llama_spit", "area_effect_cloud", "eye_of_ender", "dragon_fireball",
+            "thrown", "ice_bomb", "balloon", "tripod_camera", "chalkboard", "command_block_minecart",
+        };
+        for (auto name : kNames) {
+            if (type.find(name) != std::string::npos) return true;
+        }
+        return false;
     }
 }
 
@@ -37,6 +54,11 @@ Hitboxes::Hitboxes()
     addSliderSetting("heightScale", LocalizeString::get("client.module.hitboxes.heightScale.name"),
                      LocalizeString::get("client.module.hitboxes.heightScale.desc"), heightScale, FloatValue(0.25f),
                      FloatValue(3.f), FloatValue(0.05f));
+    addSliderSetting("maxDistance", LocalizeString::get("client.module.hitboxes.maxDistance.name"),
+                     LocalizeString::get("client.module.hitboxes.maxDistance.desc"), maxDistance, FloatValue(0.f),
+                     FloatValue(256.f), FloatValue(1.f));
+    addSetting("shrinkWithDistance", LocalizeString::get("client.module.hitboxes.shrinkWithDistance.name"),
+               LocalizeString::get("client.module.hitboxes.shrinkWithDistance.desc"), shrinkWithDistance);
     addSliderSetting("lineThickness", LocalizeString::get("client.module.hitboxes.lineThickness.name"),
                      LocalizeString::get("client.module.hitboxes.lineThickness.desc"), lineThickness, FloatValue(1.f),
                      FloatValue(10.f), FloatValue(0.5f));
@@ -50,12 +72,8 @@ Hitboxes::Hitboxes()
                LocalizeString::get("client.module.hitboxes.lookingAt.desc"), this->lineColor, "showLookingAt"_istrue);
     addSetting("items", LocalizeString::get("client.module.hitboxes.items.name"),
                LocalizeString::get("client.module.hitboxes.items.desc"), items);
-    addSetting("hideArrows", LocalizeString::get("client.module.hitboxes.hideArrows.name"),
-               LocalizeString::get("client.module.hitboxes.hideArrows.desc"), hideArrows);
-    addSetting("hideWindCharges", LocalizeString::get("client.module.hitboxes.hideWindCharges.name"),
-               LocalizeString::get("client.module.hitboxes.hideWindCharges.desc"), hideWindCharges);
-    addSetting("hidePearls", LocalizeString::get("client.module.hitboxes.hidePearls.name"),
-               LocalizeString::get("client.module.hitboxes.hidePearls.desc"), hidePearls);
+    addSetting("hideEntities", LocalizeString::get("client.module.hitboxes.hideEntities.name"),
+               LocalizeString::get("client.module.hitboxes.hideEntities.desc"), hideEntities);
     addSetting("showOwnThirdPerson", LocalizeString::get("client.module.hitboxes.showOwnThirdPerson.name"),
                LocalizeString::get("client.module.hitboxes.showOwnThirdPerson.desc"), showOwnThirdPerson);
 
@@ -95,23 +113,20 @@ void Hitboxes::onRenderLevel(RenderLevelEvent& event) {
     const bool checkRange = std::get<BoolValue>(rangeColorOn) && lp != nullptr;
     const float reach = std::get<FloatValue>(hitRange).value;
 
-    const bool hideArrow = std::get<BoolValue>(hideArrows);
-    const bool hideWind = std::get<BoolValue>(hideWindCharges);
-    const bool hidePearl = std::get<BoolValue>(hidePearls);
-    const bool anyHidden = hideArrow || hideWind || hidePearl;
+    const bool hideOthers = std::get<BoolValue>(hideEntities);
+    const float maxDist = std::get<FloatValue>(maxDistance).value;
+    const bool limitDist = maxDist > 0.f && lp != nullptr;
+    const bool shrinkFar = std::get<BoolValue>(shrinkWithDistance) && limitDist;
 
     for (const auto entt : level->getRuntimeActorList()) {
         if (entt->isInvisible()) continue;
         if (entt == lp && !drawSelf) continue;
         if (!std::get<BoolValue>(items) && entt->getEntityTypeID() == 64) continue;
 
-        // Projectiles that get no hitbox. They are told apart by their name, for example minecraft:arrow,
-        // minecraft:ender_pearl and minecraft:wind_charge_projectile (the breeze's one has wind_charge in its name too).
-        if (anyHidden && !entt->isPlayer() && entt->getEntityTypeID() != 64) {
-            const std::string type = entt->getEntityTypeName();
-            if (hideArrow && type.find("arrow") != std::string::npos) continue;
-            if (hideWind && type.find("wind_charge") != std::string::npos) continue;
-            if (hidePearl && type.find("ender_pearl") != std::string::npos) continue;
+        // "Hide Entities": no hitbox for projectiles, boats, minecarts, armor stands and the like. Players and
+        // mobs always keep theirs. Dropped items have their own switch above.
+        if (hideOthers && !entt->isPlayer() && entt->getEntityTypeID() != 64) {
+            if (isNonMobEntity(entt->getEntityTypeName())) continue;
         }
 
         Vec3 newPos = {
@@ -130,9 +145,22 @@ void Hitboxes::onRenderLevel(RenderLevelEvent& event) {
         // visual scaling below. Only for other players.
         const bool inRange = checkRange && entt != lp && entt->isPlayer() && distanceToBox(selfEye, bb) <= reach;
 
+        // Max Distance: too far away, so not drawn at all.
+        float distFade = 0.f; // 0 = right next to you, 1 = at the max distance
+        if (limitDist && entt != lp) {
+            const float dist = distanceToBox(selfEye, bb);
+            if (dist > maxDist) continue;
+            distFade = std::clamp(dist / maxDist, 0.f, 1.f);
+        }
+
         // Visual scaling: width/depth grow around the box center, height grows upward from the feet.
-        const float wScale = std::get<FloatValue>(widthScale).value;
-        const float hScale = std::get<FloatValue>(heightScale).value;
+        // The extra size fades out with distance, so a far box is the real size instead of looking huge.
+        float wScale = std::get<FloatValue>(widthScale).value;
+        float hScale = std::get<FloatValue>(heightScale).value;
+        if (shrinkFar) {
+            wScale = 1.f + (wScale - 1.f) * (1.f - distFade);
+            hScale = 1.f + (hScale - 1.f) * (1.f - distFade);
+        }
         const float origLowerY = bb.lower.y;
         if (wScale != 1.f || hScale != 1.f) {
             const Vec3 center = bb.getCenter();
