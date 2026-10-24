@@ -37,6 +37,9 @@ Hitboxes::Hitboxes()
     addSliderSetting("heightScale", LocalizeString::get("client.module.hitboxes.heightScale.name"),
                      LocalizeString::get("client.module.hitboxes.heightScale.desc"), heightScale, FloatValue(0.25f),
                      FloatValue(3.f), FloatValue(0.05f));
+    addSliderSetting("lineThickness", LocalizeString::get("client.module.hitboxes.lineThickness.name"),
+                     LocalizeString::get("client.module.hitboxes.lineThickness.desc"), lineThickness, FloatValue(1.f),
+                     FloatValue(10.f), FloatValue(0.5f));
     addSetting("showEyeLine", LocalizeString::get("client.module.hitboxes.showEyeLine.name"),
                LocalizeString::get("client.module.hitboxes.showEyeLine.desc"), this->showEyeLine);
     addSetting("eyeLine", LocalizeString::get("client.module.hitboxes.eyeLine.name"),
@@ -64,6 +67,7 @@ void Hitboxes::onRenderLevel(RenderLevelEvent& event) {
                                                      : SDK::MaterialPtr::getSelectionBoxMaterial();
 
     auto dc = MCDrawUtil3D(SDK::ClientInstance::get()->levelRenderer, SDK::ScreenContext::instance3d, material);
+    dc.setLineThickness(std::get<FloatValue>(lineThickness).value);
 
     auto lp = SDK::ClientInstance::get()->getLocalPlayer();
     auto level = SDK::ClientInstance::get()->minecraft->getLevel();

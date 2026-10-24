@@ -24,6 +24,9 @@ private:
     ValueType widthScale = FloatValue(1.3f);
     ValueType heightScale = FloatValue(1.1f);
 
+    // Thickness of every line that is drawn, in screen pixels (1 = the game's thin line).
+    ValueType lineThickness = FloatValue(1.f);
+
     ValueType showEyeLine = BoolValue(true);
     ValueType eyeColor = ColorValue(1.f, 0.f, 0.f, 1.f);
 
