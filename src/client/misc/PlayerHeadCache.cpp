@@ -73,7 +73,7 @@ namespace {
     //  - the face (base layer) is mostly see-through, or
     //  - the areas that a normal skin leaves empty (top row: left corner, the gap between head top/bottom and hat
     //    top/bottom, right corner) are full of different colors.
-    bool hasStandardFaceLayout(SkinImage const& image) {
+    bool hasStandardFaceLayout(SDK::SkinImage const& image) {
         const uint32_t s = image.width / 8;
         auto data = image.bytes.data();
         if (!data || s == 0) return true;
