@@ -15,6 +15,11 @@ private:
     ValueType transparent = BoolValue(false);
     ValueType boxColor = ColorValue(1.f, 1.f, 1.f, 1.f);
 
+    // A player's box changes color while they are close enough to hit.
+    ValueType rangeColorOn = BoolValue(true);
+    ValueType hitRange = FloatValue(3.f);
+    ValueType rangeColor = ColorValue(1.f, 0.2f, 0.2f, 1.f);
+
     // Visual-only multipliers applied to the drawn box (1.0 = the real bounding box).
     ValueType widthScale = FloatValue(1.3f);
     ValueType heightScale = FloatValue(1.1f);
@@ -33,4 +38,9 @@ private:
 
     ValueType localPlayer = BoolValue(true);
     ValueType items = BoolValue(true);
+
+    // Projectiles whose hitbox is not drawn at all.
+    ValueType hideArrows = BoolValue(true);
+    ValueType hideWindCharges = BoolValue(true);
+    ValueType hidePearls = BoolValue(true);
 };

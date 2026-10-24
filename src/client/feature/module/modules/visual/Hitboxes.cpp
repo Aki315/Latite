@@ -4,6 +4,19 @@
 #include "mc/Addresses.h"
 #include "mc/common/client/game/Options.h"
 
+#include <algorithm>
+#include <cmath>
+
+namespace {
+    // How far a point is from the closest point of a box (0 when the point is inside it).
+    float distanceToBox(Vec3 const& p, AABB const& bb) {
+        const float dx = p.x - std::clamp(p.x, bb.lower.x, bb.higher.x);
+        const float dy = p.y - std::clamp(p.y, bb.lower.y, bb.higher.y);
+        const float dz = p.z - std::clamp(p.z, bb.lower.z, bb.higher.z);
+        return std::sqrt(dx * dx + dy * dy + dz * dz);
+    }
+}
+
 Hitboxes::Hitboxes()
     : Module("Hitboxes", LocalizeString::get("client.module.hitboxes.name"),
              LocalizeString::get("client.module.hitboxes.desc"), GAME) {
@@ -11,6 +24,13 @@ Hitboxes::Hitboxes()
                LocalizeString::get("client.module.hitboxes.transparent.desc"), transparent);
     addSetting("boxColor", LocalizeString::get("client.module.hitboxes.boxColor.name"),
                LocalizeString::get("client.module.hitboxes.boxColor.desc"), boxColor);
+    addSetting("rangeColorOn", LocalizeString::get("client.module.hitboxes.rangeColorOn.name"),
+               LocalizeString::get("client.module.hitboxes.rangeColorOn.desc"), rangeColorOn);
+    addSliderSetting("hitRange", LocalizeString::get("client.module.hitboxes.hitRange.name"),
+                     LocalizeString::get("client.module.hitboxes.hitRange.desc"), hitRange, FloatValue(1.f),
+                     FloatValue(8.f), FloatValue(0.1f), "rangeColorOn"_istrue);
+    addSetting("rangeColor", LocalizeString::get("client.module.hitboxes.rangeColor.name"),
+               LocalizeString::get("client.module.hitboxes.rangeColor.desc"), rangeColor, "rangeColorOn"_istrue);
     addSliderSetting("widthScale", LocalizeString::get("client.module.hitboxes.widthScale.name"),
                      LocalizeString::get("client.module.hitboxes.widthScale.desc"), widthScale, FloatValue(0.25f),
                      FloatValue(3.f), FloatValue(0.05f));
@@ -27,6 +47,12 @@ Hitboxes::Hitboxes()
                LocalizeString::get("client.module.hitboxes.lookingAt.desc"), this->lineColor, "showLookingAt"_istrue);
     addSetting("items", LocalizeString::get("client.module.hitboxes.items.name"),
                LocalizeString::get("client.module.hitboxes.items.desc"), items);
+    addSetting("hideArrows", LocalizeString::get("client.module.hitboxes.hideArrows.name"),
+               LocalizeString::get("client.module.hitboxes.hideArrows.desc"), hideArrows);
+    addSetting("hideWindCharges", LocalizeString::get("client.module.hitboxes.hideWindCharges.name"),
+               LocalizeString::get("client.module.hitboxes.hideWindCharges.desc"), hideWindCharges);
+    addSetting("hidePearls", LocalizeString::get("client.module.hitboxes.hidePearls.name"),
+               LocalizeString::get("client.module.hitboxes.hidePearls.desc"), hidePearls);
     addSetting("showOwnThirdPerson", LocalizeString::get("client.module.hitboxes.showOwnThirdPerson.name"),
                LocalizeString::get("client.module.hitboxes.showOwnThirdPerson.desc"), showOwnThirdPerson);
 
@@ -54,10 +80,35 @@ void Hitboxes::onRenderLevel(RenderLevelEvent& event) {
     }
     const bool drawSelf = std::get<BoolValue>(showOwnThirdPerson) && perspective != 0;
 
+    // Where your eyes are this frame, to measure the distance to everything else.
+    const float partial = SDK::ClientInstance::get()->minecraft->timer->alpha;
+    Vec3 selfEye {};
+    if (lp) {
+        selfEye = { std::lerp(lp->getPosOld().x, lp->getPos().x, partial),
+                    std::lerp(lp->getPosOld().y, lp->getPos().y, partial),
+                    std::lerp(lp->getPosOld().z, lp->getPos().z, partial) };
+    }
+    const bool checkRange = std::get<BoolValue>(rangeColorOn) && lp != nullptr;
+    const float reach = std::get<FloatValue>(hitRange).value;
+
+    const bool hideArrow = std::get<BoolValue>(hideArrows);
+    const bool hideWind = std::get<BoolValue>(hideWindCharges);
+    const bool hidePearl = std::get<BoolValue>(hidePearls);
+    const bool anyHidden = hideArrow || hideWind || hidePearl;
+
     for (const auto entt : level->getRuntimeActorList()) {
         if (entt->isInvisible()) continue;
         if (entt == lp && !drawSelf) continue;
         if (!std::get<BoolValue>(items) && entt->getEntityTypeID() == 64) continue;
+
+        // Projectiles that get no hitbox. They are told apart by their name, for example minecraft:arrow,
+        // minecraft:ender_pearl and minecraft:wind_charge_projectile (the breeze's one has wind_charge in its name too).
+        if (anyHidden && !entt->isPlayer() && entt->getEntityTypeID() != 64) {
+            const std::string type = entt->getEntityTypeName();
+            if (hideArrow && type.find("arrow") != std::string::npos) continue;
+            if (hideWind && type.find("wind_charge") != std::string::npos) continue;
+            if (hidePearl && type.find("ender_pearl") != std::string::npos) continue;
+        }
 
         Vec3 newPos = {
             std::lerp(entt->getPosOld().x, entt->getPos().x, SDK::ClientInstance::get()->minecraft->timer->alpha),
@@ -70,6 +121,10 @@ void Hitboxes::onRenderLevel(RenderLevelEvent& event) {
         Vec3 rebasePos =
             newPos.operator-({ 0.f, eyeOffset, 0.f }).operator+({ 0.f, (bb.higher.y - bb.lower.y) / 2.f, 0.f });
         bb.rebase(rebasePos);
+
+        // In hit range: close enough that a hit would land. Measured from your eyes to the real box, before the
+        // visual scaling below. Only for other players.
+        const bool inRange = checkRange && entt != lp && entt->isPlayer() && distanceToBox(selfEye, bb) <= reach;
 
         // Visual scaling: width/depth grow around the box center, height grows upward from the feet.
         const float wScale = std::get<FloatValue>(widthScale).value;
@@ -87,7 +142,7 @@ void Hitboxes::onRenderLevel(RenderLevelEvent& event) {
         bool willShowLine = std::get<BoolValue>(showLine) && (!entt->isPlayer() || !connectionInfo ||
                                                               connectionInfo->hostIpAddress.empty() || entt == lp);
 
-        auto boxCol = std::get<ColorValue>(boxColor).getMainColor();
+        auto boxCol = inRange ? std::get<ColorValue>(rangeColor).getMainColor() : std::get<ColorValue>(boxColor).getMainColor();
         auto lineCol = std::get<ColorValue>(lineColor).getMainColor();
         auto eyeCol = std::get<ColorValue>(eyeColor).getMainColor();
 
