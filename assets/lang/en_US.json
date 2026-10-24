@@ -323,6 +323,8 @@
         "client.hudmodule.targetHud.showOffhand.desc": "Shows the item in their offhand.",
         "client.hudmodule.targetHud.itemSize.name": "Item Size",
         "client.hudmodule.targetHud.itemSize.desc": "How big the armor, offhand and item icons are, and the durability bar and number with them. 1 is the original size.",
+        "client.hudmodule.targetHud.heartSize.name": "Heart Size",
+        "client.hudmodule.targetHud.heartSize.desc": "How big the hearts are. 2 is the original size, 3 is 50% bigger, 4 is twice as big. The layout grows with them.",
         "client.hudmodule.targetHud.showArmorDurability.name": "Show Armor Durability",
         "client.hudmodule.targetHud.showArmorDurability.desc": "Shows a durability bar on their armor once it is damaged. This is only what the server last sent your client, so it can be out of date. Off by default until a better estimate exists.",
         "client.hudmodule.targetHud.showShieldDurability.name": "Show Shield Durability",
