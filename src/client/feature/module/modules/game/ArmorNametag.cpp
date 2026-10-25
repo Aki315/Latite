@@ -71,19 +71,6 @@ ArmorSnapshot readArmor(SDK::Actor* actor) {
     return snapshot;
 }
 
-// The armor stacks themselves (null = nothing damageable there), for the estimate.
-void readArmorStacks(SDK::Actor* actor, SDK::ItemStack* (&out)[kSlotCount]) {
-    for (auto*& stack : out) stack = nullptr;
-
-    auto* equipment = actor->tryGetComponent<SDK::ActorEquipmentComponent>();
-    if (!equipment || !equipment->armorContainer) return;
-
-    for (int slot = 0; slot < kSlotCount; ++slot) {
-        auto* stack = actor->getArmor(slot);
-        if (stack && stack->getItem()) out[slot] = stack;
-    }
-}
-
 std::string makeArmorLine(ArmorSnapshot const& armor, SlotLosses const& losses, DisplayMode mode) {
     std::string text(kArmorMarker);
     text.reserve(56);
@@ -184,6 +171,9 @@ ArmorNametag::ArmorNametag()
                LocalizeString::get("client.module.armorNametag.assumeProtection.desc"), assumeProtection);
     addSetting("assumeUnbreaking", LocalizeString::get("client.module.armorNametag.assumeUnbreaking.name"),
                LocalizeString::get("client.module.armorNametag.assumeUnbreaking.desc"), assumeUnbreaking);
+    addSliderSetting("wearScale", LocalizeString::get("client.module.armorNametag.wearScale.name"),
+                     LocalizeString::get("client.module.armorNametag.wearScale.desc"), wearScale, FloatValue(0.5f),
+                     FloatValue(3.f), FloatValue(0.05f));
 
     listen<UpdateEvent>((EventListenerFunc)&ArmorNametag::onUpdate);
     listen<PacketReceiveEvent>((EventListenerFunc)&ArmorNametag::onPacketReceive);
@@ -199,10 +189,7 @@ void ArmorNametag::onPacketReceive(Event& evG) {
     // also handles re-equipping the same armor with the same durability (where comparing only the numeric damage
     // value is ambiguous).
     if (static_cast<DurabilitySource>(durabilitySource.getSelectedKey()) == DurabilitySource::Estimated) {
-        if (const uint64_t id = ArmorEstimate::syncArmorPacket(pkt); id != 0) {
-            std::lock_guard lock(syncMutex);
-            pendingArmorSyncs[id] = true;
-        }
+        if (const uint64_t id = ArmorEstimate::syncArmorPacket(pkt); id != 0) trackers.noteArmorSync(id);
     }
 }
 
@@ -213,8 +200,7 @@ void ArmorNametag::onAttack(Event& evG) {
     if (!actor || !actor->isPlayer()) return;
 
     auto* client = SDK::ClientInstance::get();
-    ownHits[actor->getRuntimeID()] = { std::chrono::steady_clock::now(),
-                                       ArmorEstimate::heldWeapon(client ? client->getLocalPlayer() : nullptr) };
+    trackers.noteOwnHit(actor->getRuntimeID(), ArmorEstimate::heldWeapon(client ? client->getLocalPlayer() : nullptr));
 }
 
 void ArmorNametag::onUpdate(Event&) {
@@ -239,21 +225,11 @@ void ArmorNametag::onUpdate(Event&) {
     assume.strength = static_cast<int>(std::lround(getFloatOrDefault(strengthLevel, 0.f)));
     const float otherHitDamage = getFloatOrDefault(weaponDamage, 7.f) + (assume.sharpness ? 3.f : 0.f) +
                                  3.f * static_cast<float>(assume.strength);
-    const auto now = std::chrono::steady_clock::now();
+    assume.wearScale = getFloatOrDefault(wearScale, 1.f);
 
-    ++updateCounter;
-    armorSyncScratch.clear();
-    if (estimating) {
-        std::lock_guard lock(syncMutex);
-        armorSyncScratch.swap(pendingArmorSyncs); // pendingArmorSyncs becomes the (empty) old scratch map.
-        // Swings older than a few seconds are of no use any more.
-        for (auto it = ownHits.begin(); it != ownHits.end();) {
-            it = now - it->second.when > std::chrono::seconds(5) ? ownHits.erase(it) : std::next(it);
-        }
-    } else {
-        estimates.clear();
-        ownHits.clear();
-    }
+    // Follow every player's armor, also the ones out of range of the nametag line.
+    if (estimating) trackers.tick(level, localPlayer, assume, otherHitDamage);
+    else trackers.forget();
 
     for (SDK::Actor* actor : level->getRuntimeActorList()) {
         if (!actor || actor == localPlayer || !actor->isPlayer()) continue;
@@ -274,27 +250,13 @@ void ArmorNametag::onUpdate(Event&) {
 
             SlotLosses losses{};
             if (estimating) {
-                const uint64_t runtimeId = actor->getRuntimeID();
-                auto& player = estimates[runtimeId];
-                player.lastSeen = updateCounter;
-                if (armorSyncScratch.find(runtimeId) != armorSyncScratch.end()) player.tracker.resync();
-
-                // Their health + golden hearts, to spot a hit landing.
-                const auto vitals = ArmorEstimate::readVitals(actor);
-                const float totalHealth = vitals.health < 0.f ? -1.f : vitals.health + vitals.absorption;
-                const auto swing = ownHits.find(runtimeId);
-                const bool ownHit = swing != ownHits.end() && now - swing->second.when <= std::chrono::seconds(1);
-
-                SDK::ItemStack* stacks[kSlotCount];
-                readArmorStacks(actor, stacks);
-                player.tracker.update(stacks, totalHealth, ownHit, ownHit ? swing->second.weapon : ArmorEstimate::Weapon {},
-                                      otherHitDamage, assume, vitals.health);
-
-                for (int slot = 0; slot < kSlotCount; ++slot) {
-                    const int guess = player.tracker.estimatedDamage(slot);
-                    if (guess < 0 || !armor[slot]) continue;
-                    const int serverDamage = armor[slot]->maxDamage - armor[slot]->remaining;
-                    losses[slot] = std::max(0, guess - serverDamage);
+                if (auto const* tracker = trackers.find(actor->getRuntimeID())) {
+                    for (int slot = 0; slot < kSlotCount; ++slot) {
+                        const int guess = tracker->estimatedDamage(slot);
+                        if (guess < 0 || !armor[slot]) continue;
+                        const int serverDamage = armor[slot]->maxDamage - armor[slot]->remaining;
+                        losses[slot] = std::max(0, guess - serverDamage);
+                    }
                 }
             }
             desiredTag += makeArmorLine(armor, losses, mode);
@@ -304,22 +266,10 @@ void ArmorNametag::onUpdate(Event&) {
             actor->setNameTag(&desiredTag);
         }
     }
-
-    // Forget players we didn't update this pass (despawned, out of range, invisible).
-    if (estimating) {
-        for (auto it = estimates.begin(); it != estimates.end();) {
-            it = it->second.lastSeen == updateCounter ? std::next(it) : estimates.erase(it);
-        }
-    }
 }
 
 void ArmorNametag::onDisable() {
-    {
-        std::lock_guard lock(syncMutex);
-        pendingArmorSyncs.clear();
-    }
-    estimates.clear();
-    ownHits.clear();
+    trackers.forget();
 
     auto* level = currentLevel();
     if (!level || !nameTagApiReady()) return;

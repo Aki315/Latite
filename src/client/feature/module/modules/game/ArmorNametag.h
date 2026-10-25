@@ -46,15 +46,6 @@ public:
     void onDisable() override;
 
 private:
-    struct PlayerEstimate {
-        ArmorEstimate::Tracker tracker;
-        uint64_t lastSeen = 0; // updateCounter value of the last update that touched this player.
-    };
-    struct OwnHit {
-        std::chrono::steady_clock::time_point when;
-        ArmorEstimate::Weapon weapon;
-    };
-
     EnumData durabilityDisplayMode;
     EnumData durabilitySource;
     ValueType maxDistance = FloatValue(32.f); // Blocks; 0 = unlimited.
@@ -65,14 +56,8 @@ private:
     ValueType strengthLevel = FloatValue(0.f);     // Strength potion level, +3 damage per level (also for your hits).
     ValueType assumeProtection = BoolValue(true);  // Their armor is Protection IV.
     ValueType assumeUnbreaking = BoolValue(true);  // Their armor is Unbreaking III: about 30% less wear.
+    ValueType wearScale = FloatValue(1.f);         // Multiplies the wear of every hit.
 
-    // Estimated mode only.
-    std::unordered_map<uint64_t, PlayerEstimate> estimates;
-    uint64_t updateCounter = 0;
-
-    // Your own swings, newest per player. Armor syncs arrive in the packet handler and are drained by onUpdate.
-    std::unordered_map<uint64_t, OwnHit> ownHits;
-    std::mutex syncMutex;
-    std::unordered_map<uint64_t, bool> pendingArmorSyncs;
-    std::unordered_map<uint64_t, bool> armorSyncScratch; // Reused every update to avoid reallocating.
+    // Estimated mode only: one guess per player, followed every tick (also for players out of nametag range).
+    ArmorEstimate::Trackers trackers;
 };

@@ -47,10 +47,16 @@
 #include "mc/common/world/Item.h"
 #include "mc/common/world/ItemStack.h"
 #include "mc/common/world/ItemStackBase.h"
+#include "mc/common/entity/component/ActorEquipmentComponent.h"
 #include "mc/common/world/actor/Actor.h"
+#include "mc/common/world/level/Level.h"
 #include "mc/common/world/actor/player/Player.h"
 
 #include <algorithm>
+#include <chrono>
+#include <mutex>
+#include <unordered_map>
+#include <vector>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -182,6 +188,7 @@ namespace ArmorEstimate {
         bool sharpness = true;  // Your sword or axe has Sharpness V (+3 damage).
         bool unbreaking = true; // Their armor has Unbreaking III (about 30% less wear).
         int strength = 0;       // Strength potion level, +3 damage per level.
+        float wearScale = 1.f;  // Multiplies the wear of every hit; raise it if the guess keeps showing too much durability.
     };
 
     // Is a swing made right now a critical hit? The server counts it as one when you are falling and not on the ground.
@@ -346,7 +353,7 @@ namespace ArmorEstimate {
                 if (!piece.known) continue;
                 // Unbreaking III ignores 30% of the wear, and only an enchanted (glowing) piece can have it.
                 const float kept = assume.unbreaking && piece.glint ? 0.7f : 1.f;
-                piece.wear += static_cast<float>(perPiece) * kept;
+                piece.wear += static_cast<float>(perPiece) * kept * assume.wearScale;
             }
         }
 
@@ -370,5 +377,100 @@ namespace ArmorEstimate {
         Piece pieces[4];
         float lastHealth = -1.f; // Health + golden hearts at the last update.
         float lastLife = -1.f;   // Health alone at the last update, for spotting a death or a respawn.
+    };
+    // The four armor stacks of a player (null = empty slot or nothing that wears out).
+    inline void readArmorStacks(SDK::Actor* actor, SDK::ItemStack* (&out)[4]) {
+        for (auto*& stack : out) stack = nullptr;
+        auto* equipment = actor->tryGetComponent<SDK::ActorEquipmentComponent>();
+        if (!equipment || !equipment->armorContainer) return;
+        for (int slot = 0; slot < 4; ++slot) {
+            auto* stack = actor->getArmor(slot);
+            if (stack && stack->getItem()) out[slot] = stack;
+        }
+    }
+
+    // One Tracker for every player the game has loaded, kept up to date every tick whether or not anything is shown.
+    // That way no hit is missed while a player is out of the Target HUD, out of nametag range, or you switched to
+    // fighting someone else: their wear keeps adding up and is still there when you look at them again.
+    // A tracker is only dropped after the player has been gone for a couple of minutes.
+    class Trackers {
+    public:
+        // Call once per game tick. otherHitDamage: assumed damage for hits you did not throw (0 = ignore them).
+        void tick(SDK::Level* level, SDK::Actor* me, Assumptions const& assume, float otherHitDamage) {
+            if (!level || !me) return;
+            ++counter;
+
+            std::vector<uint64_t> syncs;
+            {
+                std::lock_guard lock(mutex);
+                syncs.swap(pendingSyncs);
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            for (auto it = ownHits.begin(); it != ownHits.end();) {
+                it = now - it->second.when > std::chrono::seconds(5) ? ownHits.erase(it) : std::next(it);
+            }
+
+            for (SDK::Actor* actor : level->getRuntimeActorList()) {
+                if (!actor || actor == me || !actor->isPlayer()) continue;
+
+                const uint64_t id = actor->getRuntimeID();
+                auto& entry = entries[id];
+                entry.seen = counter;
+                if (std::find(syncs.begin(), syncs.end(), id) != syncs.end()) entry.tracker.resync();
+
+                const auto vitals = readVitals(actor);
+                const float total = vitals.health < 0.f ? -1.f : vitals.health + vitals.absorption;
+                const auto swing = ownHits.find(id);
+                const bool own = swing != ownHits.end() && now - swing->second.when <= std::chrono::seconds(1);
+
+                SDK::ItemStack* stacks[4];
+                readArmorStacks(actor, stacks);
+                entry.tracker.update(stacks, total, own, own ? swing->second.weapon : Weapon {}, otherHitDamage, assume,
+                                     vitals.health);
+            }
+
+            // Drop players that have been gone for about two minutes.
+            for (auto it = entries.begin(); it != entries.end();) {
+                it = counter - it->second.seen > 2400 ? entries.erase(it) : std::next(it);
+            }
+        }
+
+        // You just swung at this player with this weapon.
+        void noteOwnHit(uint64_t id, Weapon const& weapon) { ownHits[id] = { std::chrono::steady_clock::now(), weapon }; }
+
+        // The server sent this player's whole armor again. Safe to call from the packet thread.
+        void noteArmorSync(uint64_t id) {
+            std::lock_guard lock(mutex);
+            if (pendingSyncs.size() < 64) pendingSyncs.push_back(id);
+        }
+
+        // The guess for a player, or null if they have not been seen.
+        Tracker const* find(uint64_t id) const {
+            auto it = entries.find(id);
+            return it == entries.end() ? nullptr : &it->second.tracker;
+        }
+
+        void forget() {
+            entries.clear();
+            ownHits.clear();
+            std::lock_guard lock(mutex);
+            pendingSyncs.clear();
+        }
+
+    private:
+        struct Entry {
+            Tracker tracker;
+            uint64_t seen = 0;
+        };
+        struct OwnHit {
+            std::chrono::steady_clock::time_point when;
+            Weapon weapon;
+        };
+        std::unordered_map<uint64_t, Entry> entries;
+        std::unordered_map<uint64_t, OwnHit> ownHits;
+        std::mutex mutex;
+        std::vector<uint64_t> pendingSyncs;
+        uint64_t counter = 0;
     };
 }

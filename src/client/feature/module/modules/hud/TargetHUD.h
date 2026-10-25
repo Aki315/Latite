@@ -66,6 +66,8 @@ private:
     ValueType assumeProtection = BoolValue(true);  // They wear Protection IV (4 on each piece).
     ValueType assumeSharpness = BoolValue(true);   // Your sword or axe has Sharpness V.
     ValueType assumeUnbreaking = BoolValue(true);  // Their armor has Unbreaking III.
+    ValueType otherHitDamage = FloatValue(10.f);   // Damage of a hit you did not throw (10 = diamond sword + Sharpness V), 0 = ignore.
+    ValueType wearScale = FloatValue(1.f);         // Multiplies the wear of every hit.
     static constexpr int StrengthNone = 0;
     static constexpr int StrengthI = 1;
     static constexpr int StrengthII = 2;
@@ -98,18 +100,14 @@ private:
     uint64_t shownFor = 0;
     std::chrono::steady_clock::time_point lastFrame {};
 
-    // The armor durability guess for the current target (see util/ArmorEstimate.h). It starts from what the server
-    // sent and adds the wear from every hit you land.
-    ArmorEstimate::Tracker armorTracker;
-    uint64_t guessFor = 0;
-    ArmorEstimate::Weapon lastWeapon; // What you swung at the last hit: item, enchanted, crit, your potions.
-    void updateArmorEstimate(float totalHealth, float health, TargetInfo& info);
-    void forgetArmorEstimate(); // Start over for the next target.
+    // The armor durability guesses (see util/ArmorEstimate.h): one per player, followed every tick, so the wear from
+    // all the hits adds up even while the HUD is hidden or you are fighting someone else.
+    ArmorEstimate::Trackers armorTrackers;
+    void updateArmorEstimate(TargetInfo& info);
+    void onUpdate(Event& event);
 
-    // Players the server just sent the whole armor for (filled on the packet thread, used on the game thread).
+    // The server sending a player's whole armor again (put on, taken off, swapped): their estimate starts over.
     void onPacketReceive(Event& event);
-    std::mutex syncMutex;
-    std::vector<uint64_t> pendingArmorSyncs;
 
     SDK::Actor* findTarget() const;
     bool gatherInfo(bool preview, TargetInfo& out);
