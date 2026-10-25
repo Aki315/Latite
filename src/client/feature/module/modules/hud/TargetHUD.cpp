@@ -991,6 +991,9 @@ TargetHUD::TargetHUD()
     addSetting("assumeSharpness", LocalizeString::get("client.hudmodule.targetHud.assumeSharpness.name"),
                LocalizeString::get("client.hudmodule.targetHud.assumeSharpness.desc"), assumeSharpness,
                "estimateArmor"_istrue);
+    addSliderSetting("strengthLevel", LocalizeString::get("client.hudmodule.targetHud.strengthLevel.name"),
+                     LocalizeString::get("client.hudmodule.targetHud.strengthLevel.desc"), strengthLevel, FloatValue(0.f),
+                     FloatValue(4.f), FloatValue(1.f), "estimateArmor"_istrue);
     addSetting("assumeUnbreaking", LocalizeString::get("client.hudmodule.targetHud.assumeUnbreaking.name"),
                LocalizeString::get("client.hudmodule.targetHud.assumeUnbreaking.desc"), assumeUnbreaking,
                "estimateArmor"_istrue);
@@ -1111,6 +1114,8 @@ void TargetHUD::updateArmorEstimate(float totalHealth, TargetInfo& info) {
             // We know the weapon: its damage (plus Sharpness V = +3). A weak swing or a block shows up as a smaller
             // drop than expected, so scale down by that. Never scale up, the target may have no Protection at all.
             raw = lastWeaponBase + (lastWeaponSharpable && std::get<BoolValue>(assumeSharpness) ? 3.f : 0.f);
+            // Strength adds 3 damage per level (the Java value the server uses). Fists get it too.
+            raw += 3.f * std::round(std::get<FloatValue>(strengthLevel).value);
             raw += 3.f * static_cast<float>(assumeStrength.getSelectedKey()); // Strength: +3 damage per level.
             const float expected = raw * getsThrough(raw);
             raw *= std::clamp(drop / expected, 0.2f, 1.f);

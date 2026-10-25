@@ -60,7 +60,8 @@ private:
     ValueType estimateArmor = BoolValue(true);
     ValueType assumeProtection = BoolValue(true);  // They wear Protection IV (4 on each piece).
     ValueType assumeSharpness = BoolValue(true);   // Your sword or axe has Sharpness V.
-    ValueType assumeUnbreaking = BoolValue(false); // Their armor has Unbreaking III.
+    ValueType assumeUnbreaking = BoolValue(true);  // Their armor has Unbreaking III.
+    ValueType strengthLevel = FloatValue(0.f);     // The Strength potion level you fight with, 0 = none.
     static constexpr int StrengthNone = 0;
     static constexpr int StrengthI = 1;
     static constexpr int StrengthII = 2;

@@ -333,6 +333,8 @@
         "client.hudmodule.targetHud.assumeProtection.desc": "Counts their armor as Protection IV on every piece. This is how much of your hit it is expected to block, used to tell weak swings from full ones.",
         "client.hudmodule.targetHud.assumeSharpness.name": "Assume Sharpness V",
         "client.hudmodule.targetHud.assumeSharpness.desc": "Counts your sword or axe as Sharpness V (+3 damage, the Java value the server uses), so each hit wears the armor more.",
+        "client.hudmodule.targetHud.strengthLevel.name": "Your Strength Level",
+        "client.hudmodule.targetHud.strengthLevel.desc": "The Strength potion you fight with: 0 is none, 1 is Strength I, 2 is Strength II. Each level adds 3 damage, so each hit wears their armor more.",
         "client.hudmodule.targetHud.assumeUnbreaking.name": "Assume Unbreaking III",
         "client.hudmodule.targetHud.assumeUnbreaking.desc": "Counts their armor as Unbreaking III, which ignores about 30% of the wear.",
         "client.hudmodule.targetHud.assumeStrength.name": "Assume Strength",
