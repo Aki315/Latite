@@ -159,6 +159,7 @@ namespace {
         bool armorOn = true;
         bool offhandOn = true;
         bool armorBarOn = false;     // durability bar on armor
+        int armorNumberKind = 0;     // 0 = no number on the armor, 1 = percent, 2 = points left
         bool shieldBarOn = true;     // durability bar on the offhand item
         bool shieldNumberOn = true;  // exact durability next to the offhand item
         bool shieldPercent = false;  // ... as a percent instead of the points left
@@ -420,18 +421,23 @@ namespace {
         return Durability { maxDamage - damage, maxDamage };
     }
 
-    // A thin durability bar along the bottom of a slot, like the inventory's. Only once the item is damaged.
-    // For other players this is the durability their client was last told about, or the estimate for armor.
-    void drawDurabilityBar(Frame& f, Slot const& slot, float box) {
+    // The durability to show for a slot: what the server sent, or the estimate when that says more wear.
+    std::optional<Durability> shownDurability(Slot const& slot) {
         auto durability = durabilityOf(slot.stack);
-        if (!durability) return;
-        if (slot.estDamage >= 0) {
+        if (durability && slot.estDamage >= 0) {
             // The estimate never shows more durability than the server said they have.
             const int lost = std::clamp(std::max(durability->maxDamage - durability->remaining, slot.estDamage), 0,
                                         durability->maxDamage);
             durability->remaining = durability->maxDamage - lost;
         }
-        if (durability->remaining >= durability->maxDamage) return;
+        return durability;
+    }
+
+    // A thin durability bar along the bottom of a slot, like the inventory's. Only once the item is damaged.
+    // For other players this is the durability their client was last told about, or the estimate for armor.
+    void drawDurabilityBar(Frame& f, Slot const& slot, float box) {
+        const auto durability = shownDurability(slot);
+        if (!durability || durability->remaining >= durability->maxDamage) return;
 
         const float fraction = static_cast<float>(durability->remaining) / static_cast<float>(durability->maxDamage);
         const float margin = 3.f * f.itemScale;
@@ -443,6 +449,24 @@ namespace {
         f.mc->fillRectangle({ x0, y0, x0 + (x1 - x0) * fraction, y1 }, fade(f, healthGradient(fraction)));
     }
 
+    // The armor's durability as a small number over the bottom of its slot, coloured like the bar.
+    void drawArmorNumber(Frame& f, Slot const& slot, float box) {
+        const auto durability = shownDurability(slot);
+        if (!durability) return;
+
+        const float fraction = static_cast<float>(durability->remaining) / static_cast<float>(durability->maxDamage);
+        const std::wstring text = f.armorNumberKind == 1
+            ? std::to_wstring(durability->remaining * 100 / durability->maxDamage) + L"%"
+            : std::to_wstring(durability->remaining);
+        const float size = 10.f * f.itemScale;
+        const float height = box - 5.f * f.itemScale; // Stay above the bar.
+        // A dark copy underneath keeps it readable on top of the item.
+        putText(f, slot.x + 0.75f, slot.y + 0.75f, box, height, text, fade(f, d2d::Color(0.f, 0.f, 0.f, 0.9f)), size,
+                DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_FAR);
+        putText(f, slot.x, slot.y, box, height, text, fade(f, healthGradient(fraction)), size,
+                DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_FAR);
+    }
+
     // Draws the items. Call after everything else, the item renderer changes render state.
     void drawSlotItems(Frame& f, ItemsRow const& row, float box, float icon) {
         f.mc->flush(false);
@@ -452,6 +476,7 @@ namespace {
 
             f.mc->drawItem(slot.stack, { slot.x + inset, slot.y + inset }, icon / 48.f, f.opacity);
             if (slot.offhand ? f.shieldBarOn : f.armorBarOn) drawDurabilityBar(f, slot, box);
+            if (!slot.offhand && f.armorBarOn && f.armorNumberKind != 0) drawArmorNumber(f, slot, box);
             if (slot.stack->itemCount > 1) {
                 putText(f, slot.x, slot.y, box - 1.f, box, std::to_wstring(slot.stack->itemCount), fade(f, d2d::Colors::WHITE),
                         13.f * f.itemScale, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_PARAGRAPH_ALIGNMENT_FAR);
@@ -982,6 +1007,15 @@ TargetHUD::TargetHUD()
     addSetting("showArmorDurability", LocalizeString::get("client.hudmodule.targetHud.showArmorDurability.name"),
                LocalizeString::get("client.hudmodule.targetHud.showArmorDurability.desc"), showArmorDurability,
                "showArmor"_istrue);
+    armorNumber.addEntry(EnumEntry(ArmorNumberOff, LocalizeString::get("client.hudmodule.targetHud.armorNumber.off.name"),
+                                   LocalizeString::get("client.hudmodule.targetHud.armorNumber.off.desc")));
+    armorNumber.addEntry(EnumEntry(ArmorNumberPercent, LocalizeString::get("client.hudmodule.targetHud.armorNumber.percent.name"),
+                                   LocalizeString::get("client.hudmodule.targetHud.armorNumber.percent.desc")));
+    armorNumber.addEntry(EnumEntry(ArmorNumberRemaining, LocalizeString::get("client.hudmodule.targetHud.armorNumber.remaining.name"),
+                                   LocalizeString::get("client.hudmodule.targetHud.armorNumber.remaining.desc")));
+    addEnumSetting("armorNumber", LocalizeString::get("client.hudmodule.targetHud.armorNumber.name"),
+                   LocalizeString::get("client.hudmodule.targetHud.armorNumber.desc"), armorNumber,
+                   "showArmorDurability"_istrue);
     addSetting("estimateArmor", LocalizeString::get("client.hudmodule.targetHud.estimateArmor.name"),
                LocalizeString::get("client.hudmodule.targetHud.estimateArmor.desc"), estimateArmor,
                "showArmorDurability"_istrue);
@@ -991,9 +1025,6 @@ TargetHUD::TargetHUD()
     addSetting("assumeSharpness", LocalizeString::get("client.hudmodule.targetHud.assumeSharpness.name"),
                LocalizeString::get("client.hudmodule.targetHud.assumeSharpness.desc"), assumeSharpness,
                "estimateArmor"_istrue);
-    addSliderSetting("strengthLevel", LocalizeString::get("client.hudmodule.targetHud.strengthLevel.name"),
-                     LocalizeString::get("client.hudmodule.targetHud.strengthLevel.desc"), strengthLevel, FloatValue(0.f),
-                     FloatValue(4.f), FloatValue(1.f), "estimateArmor"_istrue);
     addSetting("assumeUnbreaking", LocalizeString::get("client.hudmodule.targetHud.assumeUnbreaking.name"),
                LocalizeString::get("client.hudmodule.targetHud.assumeUnbreaking.desc"), assumeUnbreaking,
                "estimateArmor"_istrue);
@@ -1114,8 +1145,6 @@ void TargetHUD::updateArmorEstimate(float totalHealth, TargetInfo& info) {
             // We know the weapon: its damage (plus Sharpness V = +3). A weak swing or a block shows up as a smaller
             // drop than expected, so scale down by that. Never scale up, the target may have no Protection at all.
             raw = lastWeaponBase + (lastWeaponSharpable && std::get<BoolValue>(assumeSharpness) ? 3.f : 0.f);
-            // Strength adds 3 damage per level (the Java value the server uses). Fists get it too.
-            raw += 3.f * std::round(std::get<FloatValue>(strengthLevel).value);
             raw += 3.f * static_cast<float>(assumeStrength.getSelectedKey()); // Strength: +3 damage per level.
             const float expected = raw * getsThrough(raw);
             raw *= std::clamp(drop / expected, 0.2f, 1.f);
@@ -1269,6 +1298,7 @@ void TargetHUD::render(DrawUtil& dc, bool isDefault, bool inEditor) {
     f.armorOn = std::get<BoolValue>(showArmor);
     f.offhandOn = std::get<BoolValue>(showOffhand);
     f.armorBarOn = std::get<BoolValue>(showArmorDurability);
+    f.armorNumberKind = armorNumber.getSelectedKey();
     f.shieldBarOn = std::get<BoolValue>(showShieldDurability);
     const int shieldKey = shieldNumber.getSelectedKey();
     f.shieldNumberOn = f.shieldBarOn && shieldKey != ShieldNumberOff;

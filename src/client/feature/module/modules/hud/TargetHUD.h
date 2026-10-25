@@ -61,7 +61,6 @@ private:
     ValueType assumeProtection = BoolValue(true);  // They wear Protection IV (4 on each piece).
     ValueType assumeSharpness = BoolValue(true);   // Your sword or axe has Sharpness V.
     ValueType assumeUnbreaking = BoolValue(true);  // Their armor has Unbreaking III.
-    ValueType strengthLevel = FloatValue(0.f);     // The Strength potion level you fight with, 0 = none.
     static constexpr int StrengthNone = 0;
     static constexpr int StrengthI = 1;
     static constexpr int StrengthII = 2;
@@ -71,6 +70,10 @@ private:
     static constexpr int ShieldNumberPercent = 1;   // 93%
     static constexpr int ShieldNumberOff = 2;
     EnumData shieldNumber;
+    static constexpr int ArmorNumberOff = 0;
+    static constexpr int ArmorNumberPercent = 1;   // 93%
+    static constexpr int ArmorNumberRemaining = 2; // 312
+    EnumData armorNumber;
     ValueType showAbsorption = BoolValue(true);
     ValueType heartSize = FloatValue(2.f); // Size of one heart pixel; 2 = the original size. Whole numbers keep it crisp.
     ValueType itemSize = FloatValue(1.3f); // Size of the armor, offhand and item icons; 1 = the original size.

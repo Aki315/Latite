@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -166,6 +167,17 @@ ArmorNametag::ArmorNametag()
                      LocalizeString::get("client.module.armorNametag.maxDistance.desc"), maxDistance,
                      FloatValue(0.f), FloatValue(128.f), FloatValue(1.f));
 
+    addSliderSetting("weaponDamage", LocalizeString::get("client.module.armorNametag.weaponDamage.name"),
+                     LocalizeString::get("client.module.armorNametag.weaponDamage.desc"), weaponDamage, FloatValue(1.f),
+                     FloatValue(12.f), FloatValue(0.5f));
+    addSetting("assumeSharpness", LocalizeString::get("client.module.armorNametag.assumeSharpness.name"),
+               LocalizeString::get("client.module.armorNametag.assumeSharpness.desc"), assumeSharpness);
+    addSliderSetting("strengthLevel", LocalizeString::get("client.module.armorNametag.strengthLevel.name"),
+                     LocalizeString::get("client.module.armorNametag.strengthLevel.desc"), strengthLevel, FloatValue(0.f),
+                     FloatValue(4.f), FloatValue(1.f));
+    addSetting("assumeUnbreaking", LocalizeString::get("client.module.armorNametag.assumeUnbreaking.name"),
+               LocalizeString::get("client.module.armorNametag.assumeUnbreaking.desc"), assumeUnbreaking);
+
     listen<UpdateEvent>((EventListenerFunc)&ArmorNametag::onUpdate);
     listen<PacketReceiveEvent>((EventListenerFunc)&ArmorNametag::onPacketReceive);
 }
@@ -202,7 +214,7 @@ void ArmorNametag::onPacketReceive(Event& evG) {
 // If the server does not send one when durability changes, this still has to estimate
 // wear from hurt events; the protocol does not provide an exact remote-player wear value.
 SlotLosses ArmorNametag::estimateLosses(uint64_t runtimeId, ArmorSnapshot const& armor, int newHits,
-                                       bool authoritativeSync) {
+                                       float wearPerHit, bool authoritativeSync) {
     auto& player = estimates[runtimeId];
     player.lastSeen = updateCounter;
 
@@ -219,8 +231,11 @@ SlotLosses ArmorNametag::estimateLosses(uint64_t runtimeId, ArmorSnapshot const&
         if (authoritativeSync || remaining != estimate.lastActual) {
             estimate.lastActual = remaining;
             estimate.loss = 0;
+            estimate.exact = 0.f;
         } else {
-            estimate.loss = std::min(estimate.loss + newHits, armor[slot]->maxDamage);
+            estimate.exact = std::min(estimate.exact + static_cast<float>(newHits) * wearPerHit,
+                                      static_cast<float>(armor[slot]->maxDamage));
+            estimate.loss = static_cast<int>(std::lround(estimate.exact));
         }
         losses[slot] = estimate.loss;
     }
@@ -240,6 +255,12 @@ void ArmorNametag::onUpdate(Event&) {
         static_cast<DurabilitySource>(durabilitySource.getSelectedKey()) == DurabilitySource::Estimated;
     const float maxDist = getFloatOrDefault(maxDistance, 32.f); // <= 0 means unlimited.
     const auto localPos = localPlayer->getPos();
+
+    // Wear of one hit on each armor piece: max(1, floor(damage / 4)), less with Unbreaking III.
+    const float hitDamage = getFloatOrDefault(weaponDamage, 7.f) +
+                            (std::get<BoolValue>(assumeSharpness) ? 3.f : 0.f) +
+                            3.f * std::round(getFloatOrDefault(strengthLevel, 0.f));
+    const float wearPerHit = std::max(1.f, std::floor(hitDamage / 4.f)) * (std::get<BoolValue>(assumeUnbreaking) ? 0.7f : 1.f);
 
     ++updateCounter;
     hitsScratch.clear();
@@ -274,7 +295,7 @@ void ArmorNametag::onUpdate(Event&) {
                 const uint64_t runtimeId = actor->getRuntimeID();
                 const auto hit = hitsScratch.find(runtimeId);
                 const bool gotArmorSync = armorSyncScratch.find(runtimeId) != armorSyncScratch.end();
-                losses = estimateLosses(runtimeId, armor, hit != hitsScratch.end() ? hit->second : 0,
+                losses = estimateLosses(runtimeId, armor, hit != hitsScratch.end() ? hit->second : 0, wearPerHit,
                                         gotArmorSync);
             }
             desiredTag += makeArmorLine(armor, losses, mode);

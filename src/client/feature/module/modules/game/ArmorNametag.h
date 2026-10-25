@@ -29,8 +29,10 @@ using SlotLosses = std::array<int, kSlotCount>;
 //
 // Durability Source:
 //  - Actual:    shows the last durability the server synced to this client.
-//  - Estimated: additionally subtracts 1 point per observed hit, marked with "~",
+//  - Estimated: additionally subtracts the wear of every observed hit, marked with "~",
 //               and resets its baseline when a MobArmorEquipmentPacket is received.
+//               A hit wears each piece by max(1, floor(damage / 4)); the damage is assumed from the
+//               weapon, Sharpness V and Strength settings, and Unbreaking III cuts the wear by 30%.
 //               Remote-player durability still cannot be exact if the server sends no update.
 class ArmorNametag final : public Module {
 public:
@@ -44,7 +46,8 @@ public:
 private:
     struct SlotEstimate {
         int lastActual = -1; // Last synced remaining durability we saw (-1 = none yet).
-        int loss = 0;        // Estimated points lost since that sync.
+        int loss = 0;        // Estimated points lost since that sync (the rounded `exact`).
+        float exact = 0.f;   // The same, before rounding, so small wear per hit still adds up.
     };
     struct PlayerEstimate {
         std::array<SlotEstimate, ArmorNametagDetail::kSlotCount> slots{};
@@ -52,11 +55,17 @@ private:
     };
 
     ArmorNametagDetail::SlotLosses estimateLosses(uint64_t runtimeId, ArmorNametagDetail::ArmorSnapshot const& armor,
-                                                  int newHits, bool authoritativeSync);
+                                                  int newHits, float wearPerHit, bool authoritativeSync);
 
     EnumData durabilityDisplayMode;
     EnumData durabilitySource;
     ValueType maxDistance = FloatValue(32.f); // Blocks; 0 = unlimited.
+
+    // What a hit is assumed to be (Estimated mode only). The nametag can't see who hit them or with what.
+    ValueType weaponDamage = FloatValue(7.f);      // Base damage of the weapon: 7 = diamond sword, 8 = netherite.
+    ValueType assumeSharpness = BoolValue(true);   // Sharpness V: +3 damage.
+    ValueType strengthLevel = FloatValue(0.f);     // Strength potion level, +3 damage per level.
+    ValueType assumeUnbreaking = BoolValue(true);  // Unbreaking III on their armor: about 30% less wear.
 
     // Estimated mode only.
     std::unordered_map<uint64_t, PlayerEstimate> estimates;
