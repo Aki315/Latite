@@ -61,6 +61,10 @@ private:
     ValueType assumeProtection = BoolValue(true);  // They wear Protection IV (4 on each piece).
     ValueType assumeSharpness = BoolValue(true);   // Your sword or axe has Sharpness V.
     ValueType assumeUnbreaking = BoolValue(false); // Their armor has Unbreaking III.
+    static constexpr int StrengthNone = 0;
+    static constexpr int StrengthI = 1;
+    static constexpr int StrengthII = 2;
+    EnumData assumeStrength; // Which Strength potion you have on: none, I or II (+3 damage per level).
     ValueType showShieldDurability = BoolValue(true);
     static constexpr int ShieldNumberRemaining = 0; // 312
     static constexpr int ShieldNumberPercent = 1;   // 93%

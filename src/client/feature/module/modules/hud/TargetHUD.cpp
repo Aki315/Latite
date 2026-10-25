@@ -994,6 +994,15 @@ TargetHUD::TargetHUD()
     addSetting("assumeUnbreaking", LocalizeString::get("client.hudmodule.targetHud.assumeUnbreaking.name"),
                LocalizeString::get("client.hudmodule.targetHud.assumeUnbreaking.desc"), assumeUnbreaking,
                "estimateArmor"_istrue);
+    assumeStrength.addEntry(EnumEntry(StrengthNone, LocalizeString::get("client.hudmodule.targetHud.assumeStrength.none.name"),
+                                      LocalizeString::get("client.hudmodule.targetHud.assumeStrength.none.desc")));
+    assumeStrength.addEntry(EnumEntry(StrengthI, LocalizeString::get("client.hudmodule.targetHud.assumeStrength.one.name"),
+                                      LocalizeString::get("client.hudmodule.targetHud.assumeStrength.one.desc")));
+    assumeStrength.addEntry(EnumEntry(StrengthII, LocalizeString::get("client.hudmodule.targetHud.assumeStrength.two.name"),
+                                      LocalizeString::get("client.hudmodule.targetHud.assumeStrength.two.desc")));
+    addEnumSetting("assumeStrength", LocalizeString::get("client.hudmodule.targetHud.assumeStrength.name"),
+                   LocalizeString::get("client.hudmodule.targetHud.assumeStrength.desc"), assumeStrength,
+                   "estimateArmor"_istrue);
     addSetting("showShieldDurability", LocalizeString::get("client.hudmodule.targetHud.showShieldDurability.name"),
                LocalizeString::get("client.hudmodule.targetHud.showShieldDurability.desc"), showShieldDurability,
                "showOffhand"_istrue);
@@ -1102,6 +1111,7 @@ void TargetHUD::updateArmorEstimate(float totalHealth, TargetInfo& info) {
             // We know the weapon: its damage (plus Sharpness V = +3). A weak swing or a block shows up as a smaller
             // drop than expected, so scale down by that. Never scale up, the target may have no Protection at all.
             raw = lastWeaponBase + (lastWeaponSharpable && std::get<BoolValue>(assumeSharpness) ? 3.f : 0.f);
+            raw += 3.f * static_cast<float>(assumeStrength.getSelectedKey()); // Strength: +3 damage per level.
             const float expected = raw * getsThrough(raw);
             raw *= std::clamp(drop / expected, 0.2f, 1.f);
         } else {
