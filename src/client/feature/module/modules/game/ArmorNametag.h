@@ -1,8 +1,10 @@
 #pragma once
 
 #include "client/feature/module/Module.h"
+#include "util/ArmorEstimate.h"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -29,11 +31,10 @@ using SlotLosses = std::array<int, kSlotCount>;
 //
 // Durability Source:
 //  - Actual:    shows the last durability the server synced to this client.
-//  - Estimated: additionally subtracts the wear of every observed hit, marked with "~",
-//               and resets its baseline when a MobArmorEquipmentPacket is received.
-//               A hit wears each piece by max(1, floor(damage / 4)); the damage is assumed from the
-//               weapon, Sharpness V and Strength settings, and Unbreaking III cuts the wear by 30%.
-//               Remote-player durability still cannot be exact if the server sends no update.
+//  - Estimated: works like the Target HUD (see util/ArmorEstimate.h). It watches every player's health, and when it
+//               drops after you swung at them, it uses your weapon, Sharpness V and Strength to work out the wear.
+//               Hits you didn't throw use the assumed Weapon Damage settings. Estimates are marked with "~", and
+//               reset when the server sends the player's armor again.
 class ArmorNametag final : public Module {
 public:
     ArmorNametag();
@@ -41,40 +42,37 @@ public:
 
     void onUpdate(Event& event);
     void onPacketReceive(Event& event);
+    void onAttack(Event& event);
     void onDisable() override;
 
 private:
-    struct SlotEstimate {
-        int lastActual = -1; // Last synced remaining durability we saw (-1 = none yet).
-        int loss = 0;        // Estimated points lost since that sync (the rounded `exact`).
-        float exact = 0.f;   // The same, before rounding, so small wear per hit still adds up.
-    };
     struct PlayerEstimate {
-        std::array<SlotEstimate, ArmorNametagDetail::kSlotCount> slots{};
+        ArmorEstimate::Tracker tracker;
         uint64_t lastSeen = 0; // updateCounter value of the last update that touched this player.
     };
-
-    ArmorNametagDetail::SlotLosses estimateLosses(uint64_t runtimeId, ArmorNametagDetail::ArmorSnapshot const& armor,
-                                                  int newHits, float wearPerHit, bool authoritativeSync);
+    struct OwnHit {
+        std::chrono::steady_clock::time_point when;
+        ArmorEstimate::Weapon weapon;
+    };
 
     EnumData durabilityDisplayMode;
     EnumData durabilitySource;
     ValueType maxDistance = FloatValue(32.f); // Blocks; 0 = unlimited.
 
-    // What a hit is assumed to be (Estimated mode only). The nametag can't see who hit them or with what.
+    // What a hit you did NOT throw is assumed to be (Estimated mode only), and what their armor is assumed to have.
     ValueType weaponDamage = FloatValue(7.f);      // Base damage of the weapon: 7 = diamond sword, 8 = netherite.
     ValueType assumeSharpness = BoolValue(true);   // Sharpness V: +3 damage.
-    ValueType strengthLevel = FloatValue(0.f);     // Strength potion level, +3 damage per level.
-    ValueType assumeUnbreaking = BoolValue(true);  // Unbreaking III on their armor: about 30% less wear.
+    ValueType strengthLevel = FloatValue(0.f);     // Strength potion level, +3 damage per level (also for your hits).
+    ValueType assumeProtection = BoolValue(true);  // Their armor is Protection IV.
+    ValueType assumeUnbreaking = BoolValue(true);  // Their armor is Unbreaking III: about 30% less wear.
 
     // Estimated mode only.
     std::unordered_map<uint64_t, PlayerEstimate> estimates;
     uint64_t updateCounter = 0;
 
-    // Hurt events arrive in the packet handler and are drained by onUpdate.
-    std::mutex hitMutex;
-    std::unordered_map<uint64_t, int> pendingHits;
-    std::unordered_map<uint64_t, int> hitsScratch; // Reused every update to avoid reallocating.
+    // Your own swings, newest per player. Armor syncs arrive in the packet handler and are drained by onUpdate.
+    std::unordered_map<uint64_t, OwnHit> ownHits;
+    std::mutex syncMutex;
     std::unordered_map<uint64_t, bool> pendingArmorSyncs;
-    std::unordered_map<uint64_t, bool> armorSyncScratch;
+    std::unordered_map<uint64_t, bool> armorSyncScratch; // Reused every update to avoid reallocating.
 };

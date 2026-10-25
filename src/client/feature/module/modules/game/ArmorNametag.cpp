@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "ArmorNametag.h"
 
+#include "client/event/events/AttackEvent.h"
 #include "client/event/events/UpdateEvent.h"
 #include "mc/Addresses.h"
 #include "mc/common/client/game/ClientInstance.h"
@@ -16,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <optional>
 #include <string>
@@ -77,6 +79,19 @@ ArmorSnapshot readArmor(SDK::Actor* actor) {
         snapshot[slot] = ArmorDurability{std::clamp(maxDamage - damage, 0, maxDamage), maxDamage};
     }
     return snapshot;
+}
+
+// The armor stacks themselves (null = nothing damageable there), for the estimate.
+void readArmorStacks(SDK::Actor* actor, SDK::ItemStack* (&out)[kSlotCount]) {
+    for (auto*& stack : out) stack = nullptr;
+
+    auto* equipment = actor->tryGetComponent<SDK::ActorEquipmentComponent>();
+    if (!equipment || !equipment->armorContainer) return;
+
+    for (int slot = 0; slot < kSlotCount; ++slot) {
+        auto* stack = actor->getArmor(slot);
+        if (stack && stack->getItem()) out[slot] = stack;
+    }
 }
 
 std::string makeArmorLine(ArmorSnapshot const& armor, SlotLosses const& losses, DisplayMode mode) {
@@ -175,11 +190,14 @@ ArmorNametag::ArmorNametag()
     addSliderSetting("strengthLevel", LocalizeString::get("client.module.armorNametag.strengthLevel.name"),
                      LocalizeString::get("client.module.armorNametag.strengthLevel.desc"), strengthLevel, FloatValue(0.f),
                      FloatValue(4.f), FloatValue(1.f));
+    addSetting("assumeProtection", LocalizeString::get("client.module.armorNametag.assumeProtection.name"),
+               LocalizeString::get("client.module.armorNametag.assumeProtection.desc"), assumeProtection);
     addSetting("assumeUnbreaking", LocalizeString::get("client.module.armorNametag.assumeUnbreaking.name"),
                LocalizeString::get("client.module.armorNametag.assumeUnbreaking.desc"), assumeUnbreaking);
 
     listen<UpdateEvent>((EventListenerFunc)&ArmorNametag::onUpdate);
     listen<PacketReceiveEvent>((EventListenerFunc)&ArmorNametag::onPacketReceive);
+    listen<AttackEvent>((EventListenerFunc)&ArmorNametag::onAttack);
 }
 
 void ArmorNametag::onPacketReceive(Event& evG) {
@@ -187,59 +205,26 @@ void ArmorNametag::onPacketReceive(Event& evG) {
     auto* pkt = ev.getPacket();
     if (!pkt) return;
 
-    // Estimates need explicit reconciliation when the server sends a full armor
-    // equipment snapshot. This also handles re-equipping the same armor with the
-    // same durability (where comparing only the numeric damage value is ambiguous).
+    // When the server sends a player's whole armor again, the estimate for that player starts over from it. This
+    // also handles re-equipping the same armor with the same durability (where comparing only the numeric damage
+    // value is ambiguous).
     if (static_cast<DurabilitySource>(durabilitySource.getSelectedKey()) == DurabilitySource::Estimated &&
         pkt->getID() == kMobArmorEquipmentPacketId) {
         auto* armorPacket = reinterpret_cast<MobArmorEquipmentPacketView*>(pkt);
-        std::lock_guard lock(hitMutex);
+        std::lock_guard lock(syncMutex);
         pendingArmorSyncs[armorPacket->runtimeID] = true;
-        return;
     }
-
-    // ActorEvent::HURT contains a target runtime ID but no armor-slot damage amount.
-    // It can only drive an estimate, not an exact authoritative durability value.
-    if (static_cast<DurabilitySource>(durabilitySource.getSelectedKey()) != DurabilitySource::Estimated ||
-        pkt->getID() != SDK::PacketID::ACTOR_EVENT) return;
-
-    auto* actorEvent = static_cast<SDK::ActorEventPacket*>(pkt);
-    if (actorEvent->eventID != SDK::ActorEventID::HURT_ANIMATION) return;
-
-    std::lock_guard lock(hitMutex);
-    ++pendingHits[actorEvent->runtimeID];
 }
 
-// The server's armor equipment packet is treated as a fresh baseline for that player.
-// If the server does not send one when durability changes, this still has to estimate
-// wear from hurt events; the protocol does not provide an exact remote-player wear value.
-SlotLosses ArmorNametag::estimateLosses(uint64_t runtimeId, ArmorSnapshot const& armor, int newHits,
-                                       float wearPerHit, bool authoritativeSync) {
-    auto& player = estimates[runtimeId];
-    player.lastSeen = updateCounter;
+// Remember what you swung at them with, so the next health drop can be turned into armor wear.
+void ArmorNametag::onAttack(Event& evG) {
+    auto& ev = reinterpret_cast<AttackEvent&>(evG);
+    auto* actor = ev.getActor();
+    if (!actor || !actor->isPlayer()) return;
 
-    SlotLosses losses{};
-    for (int slot = 0; slot < kSlotCount; ++slot) {
-        auto& estimate = player.slots[slot];
-
-        if (!armor[slot]) {
-            estimate = SlotEstimate{};
-            continue;
-        }
-
-        const int remaining = armor[slot]->remaining;
-        if (authoritativeSync || remaining != estimate.lastActual) {
-            estimate.lastActual = remaining;
-            estimate.loss = 0;
-            estimate.exact = 0.f;
-        } else {
-            estimate.exact = std::min(estimate.exact + static_cast<float>(newHits) * wearPerHit,
-                                      static_cast<float>(armor[slot]->maxDamage));
-            estimate.loss = static_cast<int>(std::lround(estimate.exact));
-        }
-        losses[slot] = estimate.loss;
-    }
-    return losses;
+    auto* client = SDK::ClientInstance::get();
+    ownHits[actor->getRuntimeID()] = { std::chrono::steady_clock::now(),
+                                       ArmorEstimate::heldWeapon(client ? client->getLocalPlayer() : nullptr) };
 }
 
 void ArmorNametag::onUpdate(Event&) {
@@ -256,21 +241,28 @@ void ArmorNametag::onUpdate(Event&) {
     const float maxDist = getFloatOrDefault(maxDistance, 32.f); // <= 0 means unlimited.
     const auto localPos = localPlayer->getPos();
 
-    // Wear of one hit on each armor piece: max(1, floor(damage / 4)), less with Unbreaking III.
-    const float hitDamage = getFloatOrDefault(weaponDamage, 7.f) +
-                            (std::get<BoolValue>(assumeSharpness) ? 3.f : 0.f) +
-                            3.f * std::round(getFloatOrDefault(strengthLevel, 0.f));
-    const float wearPerHit = std::max(1.f, std::floor(hitDamage / 4.f)) * (std::get<BoolValue>(assumeUnbreaking) ? 0.7f : 1.f);
+    // What the estimate assumes about the armor, and the damage of a hit you did not throw.
+    ArmorEstimate::Assumptions assume;
+    assume.protection = std::get<BoolValue>(assumeProtection);
+    assume.sharpness = std::get<BoolValue>(assumeSharpness);
+    assume.unbreaking = std::get<BoolValue>(assumeUnbreaking);
+    assume.strength = static_cast<int>(std::lround(getFloatOrDefault(strengthLevel, 0.f)));
+    const float otherHitDamage = getFloatOrDefault(weaponDamage, 7.f) + (assume.sharpness ? 3.f : 0.f) +
+                                 3.f * static_cast<float>(assume.strength);
+    const auto now = std::chrono::steady_clock::now();
 
     ++updateCounter;
-    hitsScratch.clear();
     armorSyncScratch.clear();
     if (estimating) {
-        std::lock_guard lock(hitMutex);
-        hitsScratch.swap(pendingHits); // pendingHits becomes the (empty) old scratch map.
-        armorSyncScratch.swap(pendingArmorSyncs);
-    } else if (!estimates.empty()) {
+        std::lock_guard lock(syncMutex);
+        armorSyncScratch.swap(pendingArmorSyncs); // pendingArmorSyncs becomes the (empty) old scratch map.
+        // Swings older than a few seconds are of no use any more.
+        for (auto it = ownHits.begin(); it != ownHits.end();) {
+            it = now - it->second.when > std::chrono::seconds(5) ? ownHits.erase(it) : std::next(it);
+        }
+    } else {
         estimates.clear();
+        ownHits.clear();
     }
 
     for (SDK::Actor* actor : level->getRuntimeActorList()) {
@@ -293,10 +285,27 @@ void ArmorNametag::onUpdate(Event&) {
             SlotLosses losses{};
             if (estimating) {
                 const uint64_t runtimeId = actor->getRuntimeID();
-                const auto hit = hitsScratch.find(runtimeId);
-                const bool gotArmorSync = armorSyncScratch.find(runtimeId) != armorSyncScratch.end();
-                losses = estimateLosses(runtimeId, armor, hit != hitsScratch.end() ? hit->second : 0, wearPerHit,
-                                        gotArmorSync);
+                auto& player = estimates[runtimeId];
+                player.lastSeen = updateCounter;
+                if (armorSyncScratch.find(runtimeId) != armorSyncScratch.end()) player.tracker.resync();
+
+                // Their health + golden hearts, to spot a hit landing.
+                const auto vitals = ArmorEstimate::readVitals(actor);
+                const float totalHealth = vitals.health < 0.f ? -1.f : vitals.health + vitals.absorption;
+                const auto swing = ownHits.find(runtimeId);
+                const bool ownHit = swing != ownHits.end() && now - swing->second.when <= std::chrono::seconds(1);
+
+                SDK::ItemStack* stacks[kSlotCount];
+                readArmorStacks(actor, stacks);
+                player.tracker.update(stacks, totalHealth, ownHit, ownHit ? swing->second.weapon : ArmorEstimate::Weapon {},
+                                      otherHitDamage, assume);
+
+                for (int slot = 0; slot < kSlotCount; ++slot) {
+                    const int guess = player.tracker.estimatedDamage(slot);
+                    if (guess < 0 || !armor[slot]) continue;
+                    const int serverDamage = armor[slot]->maxDamage - armor[slot]->remaining;
+                    losses[slot] = std::max(0, guess - serverDamage);
+                }
             }
             desiredTag += makeArmorLine(armor, losses, mode);
         }
@@ -316,11 +325,11 @@ void ArmorNametag::onUpdate(Event&) {
 
 void ArmorNametag::onDisable() {
     {
-        std::lock_guard lock(hitMutex);
-        pendingHits.clear();
+        std::lock_guard lock(syncMutex);
         pendingArmorSyncs.clear();
     }
     estimates.clear();
+    ownHits.clear();
 
     auto* level = currentLevel();
     if (!level || !nameTagApiReady()) return;

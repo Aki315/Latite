@@ -1,6 +1,8 @@
 #pragma once
 #include "../../HUDModule.h"
 
+#include "util/ArmorEstimate.h"
+
 #include <chrono>
 #include <string>
 
@@ -93,19 +95,10 @@ private:
     uint64_t shownFor = 0;
     std::chrono::steady_clock::time_point lastFrame {};
 
-    // The armor durability guess for the current target. It starts from what the server sent and then adds the wear
-    // from every hit you land: each hit wears every armor piece by max(1, floor(damage / 4)).
-    struct ArmorGuess {
-        bool known = false;
-        std::string id;
-        int maxDamage = 0;
-        int lastServerDamage = 0;
-        int baseDamage = 0; // What the server last said, the guess builds on this.
-        float wear = 0.f;   // Extra durability lost since then, from the hits.
-    };
-    ArmorGuess armorGuess[4];
+    // The armor durability guess for the current target (see util/ArmorEstimate.h). It starts from what the server
+    // sent and adds the wear from every hit you land.
+    ArmorEstimate::Tracker armorTracker;
     uint64_t guessFor = 0;
-    float guessLastHealth = -1.f;
     float lastWeaponBase = -1.f;   // Base damage of what you swung at the last hit, -1 = unknown weapon.
     bool lastWeaponSharpable = false;
     void updateArmorEstimate(float totalHealth, TargetInfo& info);
