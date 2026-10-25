@@ -30,7 +30,13 @@
 //    never scaled up.
 //  - Swapping to an identical fresh piece with no gap, no packet and no enchant change can't be told apart from the
 //    same piece; the next durability number the server sends corrects it.
-//  - A hit is only recognised from a health drop of 0.3 or more, so tiny hits through strong armor are missed.
+//  - A hit is only recognised from a health drop: 0.05 or more right after you swung, 0.3 or more for hits you didn't
+//    throw. A hit that takes no health at all (a block, a swing the server cancelled) isn't counted.
+//  - The damage numbers follow Blurry's Java PvP addon (item damage, crit x1.5, Sharpness 0.5 x level + 0.5, Strength
+//    +3, Weakness -4). The addon also scales damage by your attack cooldown; the client can't see that, so a weak
+//    swing is only noticed through the smaller health drop.
+//  - Armor reduction and wear are the game's own (the addon deals damage with applyDamage), so they use Bedrock's armor
+//    points and toughness, and the usual wear of max(1, floor(damage / 4)) per piece.
 //  - The result is an estimate, and the displays mark it with ~.
 
 #include "mc/Addresses.h"
@@ -126,6 +132,7 @@ namespace ArmorEstimate {
             { "diamond_sword", 7.f },  { "netherite_sword", 8.f }, { "wooden_axe", 7.f },  { "golden_axe", 7.f },
             { "stone_axe", 9.f },      { "iron_axe", 9.f },      { "diamond_axe", 9.f },  { "netherite_axe", 10.f },
             { "trident", 8.f },        { "mace", 5.f },
+            { "copper_sword", 4.f },   { "copper_axe", 7.f }, // In Blurry's addon too (minecraft:damage in its item files).
             // Tools the server's damage table knows too.
             { "wooden_pickaxe", 2.f }, { "stone_pickaxe", 3.f }, { "iron_pickaxe", 4.f }, { "diamond_pickaxe", 5.f },
             { "netherite_pickaxe", 6.f },
@@ -294,8 +301,12 @@ namespace ArmorEstimate {
             const float previous = lastHealth;
             lastHealth = totalHealth;
             const float drop = previous - totalHealth;
-            if (count == 0 || previous < 0.f || totalHealth < 0.f || drop < 0.3f) return;
+            if (count == 0 || previous < 0.f || totalHealth < 0.f) return;
             if (!ownHit && otherHitDamage <= 0.f) return;
+            // Armor like full netherite with Protection lets very little of a hit through, so a hit you just threw can
+            // be a drop of only a tenth of a heart or so. Hits you didn't throw need a clearer drop to be told apart
+            // from anything else (poison, fire, hunger).
+            if (drop < (ownHit ? 0.05f : 0.3f)) return;
 
             // How much of a hit gets through their armor: armor points, then Protection (IV on every enchanted piece).
             const float protection = assume.protection ? 1.f - std::min(20.f, 4.f * enchantedPieces) * 0.04f : 1.f;
