@@ -15,17 +15,24 @@
 namespace {
     using Quad = std::array<Vec3, 4>;
 
+    struct ShadedQuad {
+        Quad quad;
+        float shade; // How bright the face is, the way the game lights the faces of a block.
+    };
+
     // The frame the Java pack puts on every face of the block: on each of the six faces, a border of width t made of
     // four flat strips (bottom, top, left, right). Coordinates are in blocks, relative to the block's lower corner.
     // The strips sit a hair outside the block, so they never flicker against the faces of neighbouring blocks.
-    std::vector<Quad> frameQuads(float t) {
+    std::vector<ShadedQuad> frameQuads(float t) {
         constexpr float out = 0.002f;
-        std::vector<Quad> quads;
+        std::vector<ShadedQuad> quads;
         quads.reserve(24);
 
         for (int axis = 0; axis < 3; ++axis) {
             for (int side = 0; side < 2; ++side) {
                 const float plane = side == 0 ? -out : 1.f + out;
+                // Same brightness the game gives the faces of a block: top 1, east/west 0.6, north/south 0.8, bottom 0.5.
+                const float shade = axis == 1 ? (side == 1 ? 1.f : 0.5f) : (axis == 0 ? 0.6f : 0.8f);
 
                 // A point on this face. u and v run along the face: for the x faces (y, z), for the y faces (x, z) and
                 // for the z faces (x, y).
@@ -37,7 +44,7 @@ namespace {
                     }
                 };
                 auto strip = [&](float u0, float v0, float u1, float v1) {
-                    quads.push_back({ point(u0, v0), point(u1, v0), point(u1, v1), point(u0, v1) });
+                    quads.push_back({ { point(u0, v0), point(u1, v0), point(u1, v1), point(u0, v1) }, shade });
                 };
 
                 strip(0.f, 0.f, 1.f, t);           // bottom
@@ -142,14 +149,18 @@ void CobwebOutline::onRenderLevel(RenderLevelEvent& event) {
         return;
     }
 
-    // The Java look: a frame on every face of every cobweb.
+    // The Java look: a solid frame on every face of every cobweb, lit like the faces of a block. This uses the same
+    // material as the thin lines (not the see-through overlay, which blends with whatever is behind it and made the
+    // frame look green on grass and brown on dirt).
     auto dc = MCDrawUtil3D(ci->levelRenderer, SDK::ScreenContext::instance3d,
-                           SDK::MaterialPtr::getSelectionOverlayMaterial());
+                           SDK::MaterialPtr::getSelectionBoxMaterial());
     const auto quads = frameQuads(std::get<FloatValue>(thickness).value);
     for (auto const& bp : webs) {
         const Vec3 origin { static_cast<float>(bp.x), static_cast<float>(bp.y), static_cast<float>(bp.z) };
-        for (auto const& quad : quads) {
-            dc.fillQuad(origin + quad[0], origin + quad[1], origin + quad[2], origin + quad[3], color);
+        for (auto const& face : quads) {
+            auto const& q = face.quad;
+            const d2d::Color shaded(color.r * face.shade, color.g * face.shade, color.b * face.shade, color.a);
+            dc.fillQuad(origin + q[0], origin + q[1], origin + q[2], origin + q[3], shaded);
         }
     }
     dc.flush();
