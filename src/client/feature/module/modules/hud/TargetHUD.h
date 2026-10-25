@@ -4,7 +4,10 @@
 #include "util/ArmorEstimate.h"
 
 #include <chrono>
+#include <cstdint>
+#include <mutex>
 #include <string>
+#include <vector>
 
 // What the Target HUD knows about the player you hit.
 struct TargetInfo {
@@ -99,9 +102,14 @@ private:
     // sent and adds the wear from every hit you land.
     ArmorEstimate::Tracker armorTracker;
     uint64_t guessFor = 0;
-    float lastWeaponBase = -1.f;   // Base damage of what you swung at the last hit, -1 = unknown weapon.
-    bool lastWeaponSharpable = false;
-    void updateArmorEstimate(float totalHealth, TargetInfo& info);
+    ArmorEstimate::Weapon lastWeapon; // What you swung at the last hit: item, enchanted, crit, your potions.
+    void updateArmorEstimate(float totalHealth, float health, TargetInfo& info);
+    void forgetArmorEstimate(); // Start over for the next target.
+
+    // Players the server just sent the whole armor for (filled on the packet thread, used on the game thread).
+    void onPacketReceive(Event& event);
+    std::mutex syncMutex;
+    std::vector<uint64_t> pendingArmorSyncs;
 
     SDK::Actor* findTarget() const;
     bool gatherInfo(bool preview, TargetInfo& out);

@@ -30,16 +30,6 @@ using namespace ArmorNametagDetail;
 enum class DisplayMode : int { Percentage = 0, Points = 1 };
 enum class DurabilitySource : int { Actual = 0, Estimated = 1 };
 
-// Protocol 1.26.51: MobArmorEquipmentPacket is packet ID 32 (0x20), and its
-// first serialized field is the target ActorRuntimeID. Latite does not currently
-// expose a typed wrapper for this packet, so keep this version-specific view
-// limited to that first field. The wire schema does not itself guarantee C++
-// object layout; validate this against the target game's packet class before use.
-struct MobArmorEquipmentPacketView : SDK::Packet {
-    uint64_t runtimeID;
-};
-constexpr auto kMobArmorEquipmentPacketId = static_cast<SDK::PacketID>(0x20);
-
 // "\302\247" is the UTF-8 encoding of the section sign. Octal escapes stop after
 // three digits, so a color code can follow directly without splitting the literal.
 constexpr std::string_view kSectionSign = "\302\247";
@@ -208,11 +198,11 @@ void ArmorNametag::onPacketReceive(Event& evG) {
     // When the server sends a player's whole armor again, the estimate for that player starts over from it. This
     // also handles re-equipping the same armor with the same durability (where comparing only the numeric damage
     // value is ambiguous).
-    if (static_cast<DurabilitySource>(durabilitySource.getSelectedKey()) == DurabilitySource::Estimated &&
-        pkt->getID() == kMobArmorEquipmentPacketId) {
-        auto* armorPacket = reinterpret_cast<MobArmorEquipmentPacketView*>(pkt);
-        std::lock_guard lock(syncMutex);
-        pendingArmorSyncs[armorPacket->runtimeID] = true;
+    if (static_cast<DurabilitySource>(durabilitySource.getSelectedKey()) == DurabilitySource::Estimated) {
+        if (const uint64_t id = ArmorEstimate::syncArmorPacket(pkt); id != 0) {
+            std::lock_guard lock(syncMutex);
+            pendingArmorSyncs[id] = true;
+        }
     }
 }
 
@@ -298,7 +288,7 @@ void ArmorNametag::onUpdate(Event&) {
                 SDK::ItemStack* stacks[kSlotCount];
                 readArmorStacks(actor, stacks);
                 player.tracker.update(stacks, totalHealth, ownHit, ownHit ? swing->second.weapon : ArmorEstimate::Weapon {},
-                                      otherHitDamage, assume);
+                                      otherHitDamage, assume, vitals.health);
 
                 for (int slot = 0; slot < kSlotCount; ++slot) {
                     const int guess = player.tracker.estimatedDamage(slot);

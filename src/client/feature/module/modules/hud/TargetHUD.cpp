@@ -2,6 +2,7 @@
 #include "TargetHUD.h"
 
 #include "client/event/events/AttackEvent.h"
+#include "client/event/events/PacketReceiveEvent.h"
 #include "client/misc/PlayerHeadCache.h"
 #include "mc/Addresses.h"
 #include "mc/common/client/game/ClientInstance.h"
@@ -973,6 +974,22 @@ TargetHUD::TargetHUD()
     rect = { 0.f, 0.f, 260.f, 80.f };
 
     listen<AttackEvent>((EventListenerFunc)&TargetHUD::onAttack);
+    listen<PacketReceiveEvent>((EventListenerFunc)&TargetHUD::onPacketReceive);
+}
+
+// When the server sends a player's whole armor again (put on, taken off, swapped), the estimate for them starts over.
+void TargetHUD::onPacketReceive(Event& evG) {
+    auto& ev = reinterpret_cast<PacketReceiveEvent&>(evG);
+    const uint64_t id = ArmorEstimate::syncArmorPacket(ev.getPacket());
+    if (id == 0) return;
+
+    std::lock_guard lock(syncMutex);
+    if (pendingArmorSyncs.size() < 64) pendingArmorSyncs.push_back(id);
+}
+
+void TargetHUD::forgetArmorEstimate() {
+    armorTracker.reset();
+    guessFor = 0;
 }
 
 void TargetHUD::afterLoadConfig() {
@@ -993,10 +1010,20 @@ void TargetHUD::afterLoadConfig() {
     storePos(screenSize);
 }
 
-void TargetHUD::updateArmorEstimate(float totalHealth, TargetInfo& info) {
+void TargetHUD::updateArmorEstimate(float totalHealth, float health, TargetInfo& info) {
     if (guessFor != info.id) {
-        armorTracker.reset();
+        forgetArmorEstimate();
         guessFor = info.id;
+    }
+
+    // The server sent this player's armor again: trust its numbers over the guess.
+    {
+        std::lock_guard lock(syncMutex);
+        const auto before = pendingArmorSyncs.size();
+        std::erase(pendingArmorSyncs, info.id);
+        if (pendingArmorSyncs.size() != before) armorTracker.resync();
+        // Entries for other players are only useful for a moment, so don't let them pile up.
+        if (pendingArmorSyncs.size() > 32) pendingArmorSyncs.clear();
     }
 
     // Your hit if you swung at them in the last second.
@@ -1006,7 +1033,7 @@ void TargetHUD::updateArmorEstimate(float totalHealth, TargetInfo& info) {
     assume.sharpness = std::get<BoolValue>(assumeSharpness);
     assume.unbreaking = std::get<BoolValue>(assumeUnbreaking);
     assume.strength = assumeStrength.getSelectedKey(); // None, I or II: the key is the level.
-    armorTracker.update(info.armor, totalHealth, seconds <= 1.f, { lastWeaponBase, lastWeaponSharpable }, 0.f, assume);
+    armorTracker.update(info.armor, totalHealth, seconds <= 1.f, lastWeapon, 0.f, assume, health);
 
     for (int i = 0; i < 4; ++i) {
         if (info.armor[i]) info.armorDamage[i] = armorTracker.estimatedDamage(i);
@@ -1019,13 +1046,7 @@ void TargetHUD::onAttack(Event& evG) {
     if (!actor || !actor->isPlayer()) return;
 
     // What you hit with, for the armor durability estimate.
-    lastWeaponBase = 1.f; // Bare hand.
-    lastWeaponSharpable = false;
-    if (auto* me = SDK::ClientInstance::get()->getLocalPlayer(); me && me->supplies && me->supplies->inventory) {
-        auto* held = me->supplies->inventory->getItem(me->supplies->selectedSlot);
-        auto* item = held ? held->getItem() : nullptr;
-        if (item) lastWeaponBase = ArmorEstimate::weaponBase(item->namespacedId.getString(), lastWeaponSharpable);
-    }
+    lastWeapon = ArmorEstimate::heldWeapon(SDK::ClientInstance::get()->getLocalPlayer());
 
     targetId = actor->getRuntimeID();
     lastHit = std::chrono::steady_clock::now();
@@ -1088,6 +1109,7 @@ bool TargetHUD::gatherInfo(bool preview, TargetInfo& info) {
     const float elapsed = std::chrono::duration<float>(std::chrono::steady_clock::now() - lastHit).count();
     if (elapsed > visibleSeconds) {
         hasTarget = false;
+        forgetArmorEstimate(); // Out of sight, so we can't follow their fights: start over when they come back.
         return false;
     }
     // Fade out over the last moments, so it does not just vanish.
@@ -1095,7 +1117,10 @@ bool TargetHUD::gatherInfo(bool preview, TargetInfo& info) {
     info.opacity = std::clamp((visibleSeconds - elapsed) / fadeSeconds, 0.f, 1.f);
 
     SDK::Actor* actor = findTarget();
-    if (!actor || !actor->isPlayer()) return false;
+    if (!actor || !actor->isPlayer()) {
+        forgetArmorEstimate(); // Died, left or got out of range.
+        return false;
+    }
 
     auto* player = static_cast<SDK::Player*>(actor);
     info.id = actor->getRuntimeID();
@@ -1115,7 +1140,7 @@ bool TargetHUD::gatherInfo(bool preview, TargetInfo& info) {
                 if (stack && stack->getItem()) info.armor[slot] = stack;
             }
             if (std::get<BoolValue>(estimateArmor)) {
-                updateArmorEstimate(vitals.health < 0.f ? -1.f : vitals.health + vitals.absorption, info);
+                updateArmorEstimate(vitals.health < 0.f ? -1.f : vitals.health + vitals.absorption, vitals.health, info);
             }
         }
         if (equipment->handContainer) {

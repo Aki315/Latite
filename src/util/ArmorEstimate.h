@@ -6,9 +6,38 @@
 // weapon (plus Sharpness V and Strength, as the server's Java PvP rules count them); for other hits it uses an assumed
 // damage. How much of a hit gets through the armor (armor points, toughness, Protection IV) is used to tell weak
 // swings and blocks from full hits.
+//
+// Critical hits are counted on their own: the server's Java PvP rules make a swing a crit when you are falling and
+// not on the ground, and a crit multiplies the weapon's base damage by 1.5 (Sharpness and Strength are added after).
+// The client sees the same thing as your height dropping from one tick to the next, so no setting is needed.
+//
+// What it reads about YOUR swing on its own: the item in your hand (swords, axes, trident, pickaxes, shovels, hoes and
+// the mace; anything else is worked out from how much health it took), whether that item is enchanted (it glows),
+// and your own Strength and Weakness potions. For THEIR armor it checks which pieces are enchanted the same way.
+// The client can't read the enchantment levels themselves, so an enchanted sword is taken as Sharpness V and enchanted
+// armor as Protection IV, as far as the Assume settings allow. Unbreaking is only counted on pieces that glow, since
+// a plain piece can't have it.
+//
+// When the estimate starts over (so it never shows a stale number): the target dies (health reaches 0) or comes back
+// to life (health jumps up by 10 or more), a piece disappears from its slot, a different item or enchanted state
+// shows up in a slot, the server's durability for a piece goes down (repaired / fresh piece), the server sends the
+// whole armor again (see syncArmorPacket), and the owner of the tracker calls reset() on a new target.
+//
+// Limits, since the client can't see everything:
+//  - Enchantment LEVELS are not readable (the tag data isn't exposed), only "enchanted or not", so levels are assumed.
+//  - Other players' potions (Resistance, Weakness on them) and their shield blocks are not visible. A block or a weaker
+//    hit than expected shows up as a smaller health drop and scales the wear down, but a hit harder than expected is
+//    never scaled up.
+//  - Swapping to an identical fresh piece with no gap, no packet and no enchant change can't be told apart from the
+//    same piece; the next durability number the server sends corrects it.
+//  - A hit is only recognised from a health drop of 0.3 or more, so tiny hits through strong armor are missed.
+//  - The result is an estimate, and the displays mark it with ~.
 
 #include "mc/Addresses.h"
 #include "mc/common/entity/component/AttributesComponent.h"
+#include "mc/common/entity/IEntityComponent.h"
+#include "mc/common/entity/component/MobEffectsComponent.h"
+#include "mc/common/network/Packet.h"
 #include "mc/common/world/Item.h"
 #include "mc/common/world/ItemStack.h"
 #include "mc/common/world/ItemStackBase.h"
@@ -17,6 +46,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <string>
 
 namespace ArmorEstimate {
@@ -95,12 +125,20 @@ namespace ArmorEstimate {
             { "wooden_sword", 4.f },   { "golden_sword", 4.f },  { "stone_sword", 5.f },  { "iron_sword", 6.f },
             { "diamond_sword", 7.f },  { "netherite_sword", 8.f }, { "wooden_axe", 7.f },  { "golden_axe", 7.f },
             { "stone_axe", 9.f },      { "iron_axe", 9.f },      { "diamond_axe", 9.f },  { "netherite_axe", 10.f },
-            { "trident", 8.f },
+            { "trident", 8.f },        { "mace", 5.f },
+            // Tools the server's damage table knows too.
+            { "wooden_pickaxe", 2.f }, { "stone_pickaxe", 3.f }, { "iron_pickaxe", 4.f }, { "diamond_pickaxe", 5.f },
+            { "netherite_pickaxe", 6.f },
+            { "wooden_shovel", 2.5f }, { "stone_shovel", 3.5f }, { "iron_shovel", 4.5f }, { "diamond_shovel", 5.5f },
+            { "netherite_shovel", 6.5f },
+            { "wooden_hoe", 1.f },     { "stone_hoe", 1.f },     { "iron_hoe", 1.f },     { "diamond_hoe", 1.f },
+            { "netherite_hoe", 1.f },
         };
         const std::string name = shortName(id);
         for (auto const& w : kWeapons) {
             if (name == w.name) {
-                sharpable = name != "trident";
+                // Sharpness only goes on swords and axes.
+                sharpable = name.find("_sword") != std::string::npos || name.find("_axe") != std::string::npos;
                 return w.damage;
             }
         }
@@ -111,7 +149,26 @@ namespace ArmorEstimate {
     struct Weapon {
         float base = -1.f; // -1 = unknown weapon
         bool sharpable = false;
+        bool crit = false; // The swing was a critical hit: you were falling.
+        bool enchanted = false; // The item in your hand glows, so it has enchantments (taken as Sharpness V).
+        int strength = 0;       // Your own Strength level when you swung (0 = none).
+        int weakness = 0;       // Your own Weakness level when you swung (0 = none).
     };
+
+    // MobArmorEquipmentPacket (protocol 1.26.51, packet id 32): the server sends a player's whole armor again, when
+    // they put armor on, take it off or it changes. Its first field is the actor's runtime id. Latite has no typed
+    // wrapper for it, so this is a small view of just that field; check it against the game version before relying on it.
+    struct MobArmorEquipmentPacketView : SDK::Packet {
+        uint64_t runtimeID;
+    };
+    constexpr auto kMobArmorEquipmentPacketId = static_cast<SDK::PacketID>(0x20);
+
+    // If the packet is a whole-armor update, the runtime id of the player it is for, otherwise 0. Packet thread: only
+    // read, remember the id, and act on it later from the game thread.
+    inline uint64_t syncArmorPacket(SDK::Packet* packet) {
+        if (!packet || packet->getID() != kMobArmorEquipmentPacketId) return 0;
+        return reinterpret_cast<MobArmorEquipmentPacketView*>(packet)->runtimeID;
+    }
 
     struct Assumptions {
         bool protection = true; // They wear Protection IV on every piece.
@@ -120,13 +177,42 @@ namespace ArmorEstimate {
         int strength = 0;       // Strength potion level, +3 damage per level.
     };
 
-    // What you are holding, as a weapon. A bare hand does 1.
+    // Is a swing made right now a critical hit? The server counts it as one when you are falling and not on the ground.
+    // Going down faster than a slow sink in water, from one tick to the next, is the same thing.
+    inline bool isCriticalSwing(SDK::Actor* me) {
+        if (!me || !me->stateVector) return false;
+        return me->getPosOld().y - me->getPos().y > 0.035f;
+    }
+
+    // Your own Strength and Weakness levels (0 = none), read from the effects the game keeps on you.
+    // Effect ids: 5 is Strength, 18 is Weakness. The amplifier starts at 0 for level I.
+    inline void readOwnEffects(SDK::Actor* me, int& strength, int& weakness) {
+        strength = 0;
+        weakness = 0;
+        if (!me) return;
+        auto* effects = me->tryGetComponent<SDK::MobEffectsComponent>();
+        if (!effects) return;
+        for (auto const& effect : effects->read()) {
+            const int level = std::clamp(effect.amplifier + 1, 0, 10);
+            if (effect.id == 5) strength = std::max(strength, level);
+            else if (effect.id == 18) weakness = std::max(weakness, level);
+        }
+    }
+
+    // What you are swinging, as a weapon: the item in your hand (a bare hand does 1), whether it is enchanted, whether
+    // the swing is a crit, and your own potions. Call it when you hit.
     inline Weapon heldWeapon(SDK::Player* me) {
-        Weapon weapon { 1.f, false };
+        Weapon weapon;
+        weapon.base = 1.f;
+        weapon.crit = isCriticalSwing(me);
+        readOwnEffects(me, weapon.strength, weapon.weakness);
         if (me && me->supplies && me->supplies->inventory) {
             auto* held = me->supplies->inventory->getItem(me->supplies->selectedSlot);
             auto* item = held ? held->getItem() : nullptr;
-            if (item) weapon.base = weaponBase(item->namespacedId.getString(), weapon.sharpable);
+            if (item) {
+                weapon.base = weaponBase(item->namespacedId.getString(), weapon.sharpable);
+                weapon.enchanted = item->isGlint(held);
+            }
         }
         return weapon;
     }
@@ -138,6 +224,7 @@ namespace ArmorEstimate {
         void reset() {
             for (auto& p : pieces) p = {};
             lastHealth = -1.f;
+            lastLife = -1.f;
         }
 
         // The server sent this player's whole armor again: forget the wear, trust what it says.
@@ -151,10 +238,24 @@ namespace ArmorEstimate {
         // armor: the four armor stacks (null = empty slot). totalHealth: health + golden hearts, < 0 if unknown.
         // ownHit: you swung at them just now, so `weapon` is what hit. Otherwise a drop is counted only if
         // `otherHitDamage` is above 0 (an assumed damage for hits you can't see).
+        //
+        // health: their health without golden hearts, or < 0 if unknown. Used to notice a death or a respawn.
         void update(SDK::ItemStack* const* armor, float totalHealth, bool ownHit, Weapon const& weapon,
-                    float otherHitDamage, Assumptions const& assume) {
+                    float otherHitDamage, Assumptions const& assume, float health = -1.f) {
+            // Dead (health 0) or alive again (a jump of 10 or more, which healing can't do but a respawn does): the
+            // wear belongs to the last life, so start over from what the server says now.
+            if (health >= 0.f) {
+                const bool died = health <= 0.05f;
+                const bool revived = lastLife >= 0.f && health - lastLife >= 10.f;
+                if (died || revived) reset();
+                lastLife = health;
+            } else {
+                lastLife = -1.f;
+            }
+
             float defense = 0.f, toughness = 0.f;
             int count = 0;
+            int enchantedPieces = 0; // Armor pieces that glow: taken as Protection IV.
             for (int i = 0; i < 4; ++i) {
                 auto& piece = pieces[i];
                 auto* item = armor[i] ? armor[i]->getItem() : nullptr;
@@ -166,10 +267,12 @@ namespace ArmorEstimate {
 
                 const int server = std::clamp(static_cast<int>(armor[i]->getDamageValue()), 0, maxDamage);
                 const std::string id = item->namespacedId.getString();
-                if (!piece.known || piece.id != id || server < piece.lastServerDamage) {
+                const bool glint = item->isGlint(armor[i]);
+                if (!piece.known || piece.id != id || piece.glint != glint || server < piece.lastServerDamage) {
                     // A new piece (or a repaired one): start over.
                     piece.known = true;
                     piece.id = id;
+                    piece.glint = glint;
                     piece.baseDamage = server;
                     piece.wear = 0.f;
                 } else if (server > piece.lastServerDamage) {
@@ -185,6 +288,7 @@ namespace ArmorEstimate {
                 defense += d;
                 toughness += t;
                 ++count;
+                if (glint) ++enchantedPieces;
             }
 
             const float previous = lastHealth;
@@ -193,8 +297,8 @@ namespace ArmorEstimate {
             if (count == 0 || previous < 0.f || totalHealth < 0.f || drop < 0.3f) return;
             if (!ownHit && otherHitDamage <= 0.f) return;
 
-            // How much of a hit gets through their armor: armor points, then Protection.
-            const float protection = assume.protection ? 1.f - std::min(20.f, 4.f * count) * 0.04f : 1.f;
+            // How much of a hit gets through their armor: armor points, then Protection (IV on every enchanted piece).
+            const float protection = assume.protection ? 1.f - std::min(20.f, 4.f * enchantedPieces) * 0.04f : 1.f;
             auto getsThrough = [&](float raw) {
                 const float reduction =
                     std::clamp(std::max(defense / 5.f, defense - raw / (2.f + toughness / 4.f)), 0.f, 20.f) / 25.f;
@@ -203,8 +307,13 @@ namespace ArmorEstimate {
 
             float raw;
             if (ownHit && weapon.base >= 0.f) {
-                // We know the weapon: its damage, Sharpness V = +3, Strength = +3 per level.
-                raw = weapon.base + (weapon.sharpable && assume.sharpness ? 3.f : 0.f) + 3.f * static_cast<float>(assume.strength);
+                // We know the weapon: its damage (x1.5 on a crit), Sharpness V = +3 on an enchanted sword or axe,
+                // Strength = +3 per level (your potion, or the extra level from the settings), Weakness = -4 per level.
+                const int strength = std::max(weapon.strength, assume.strength);
+                raw = (weapon.crit ? weapon.base * 1.5f : weapon.base) +
+                      (weapon.sharpable && weapon.enchanted && assume.sharpness ? 3.f : 0.f) +
+                      3.f * static_cast<float>(strength) - 4.f * static_cast<float>(weapon.weakness);
+                raw = std::max(raw, 1.f);
             } else if (!ownHit) {
                 raw = otherHitDamage;
             } else {
@@ -214,16 +323,19 @@ namespace ArmorEstimate {
                 raw = std::max(raw, 1.f);
             }
             if (ownHit ? weapon.base >= 0.f : true) {
-                // A weak swing or a block shows up as a smaller drop than expected, so scale down by that. Never
-                // scale up: the target may not have Protection at all.
+                // A weak swing or a block shows up as a smaller drop than expected, so scale down by that. This also
+                // corrects a crit that was guessed wrong. Never scale up: the target may not have Protection at all.
                 const float expected = raw * getsThrough(raw);
                 raw *= std::clamp(drop / expected, 0.2f, 1.f);
             }
 
-            const int perPiece = std::max(1, static_cast<int>(std::floor(raw / 4.f)));
-            const float kept = assume.unbreaking ? 0.7f : 1.f; // Unbreaking III: 30% of the wear is ignored.
+            // The small extra keeps a damage of exactly 12 (3 wear) from reading as 11.9999 (2 wear) after the scaling.
+            const int perPiece = std::max(1, static_cast<int>(std::floor(raw / 4.f + 0.01f)));
             for (auto& piece : pieces) {
-                if (piece.known) piece.wear += static_cast<float>(perPiece) * kept;
+                if (!piece.known) continue;
+                // Unbreaking III ignores 30% of the wear, and only an enchanted (glowing) piece can have it.
+                const float kept = assume.unbreaking && piece.glint ? 0.7f : 1.f;
+                piece.wear += static_cast<float>(perPiece) * kept;
             }
         }
 
@@ -239,11 +351,13 @@ namespace ArmorEstimate {
             bool known = false;
             std::string id;
             int maxDamage = 0;
+            bool glint = false; // It was enchanted (glowing) when we saw it; a change means a different piece.
             int lastServerDamage = 0;
             int baseDamage = 0; // What the server last said, the guess builds on this.
             float wear = 0.f;   // Extra durability lost since then, from the hits.
         };
         Piece pieces[4];
-        float lastHealth = -1.f;
+        float lastHealth = -1.f; // Health + golden hearts at the last update.
+        float lastLife = -1.f;   // Health alone at the last update, for spotting a death or a respawn.
     };
 }
