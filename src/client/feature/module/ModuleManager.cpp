@@ -23,7 +23,6 @@
 #include "modules/game/KillNotification.h"
 #include "modules/game/Gyro.h"
 #include "modules/game/ArmorNametag.h"
-#include "modules/game/ArmorDebug.h"
 #include "modules/game/HealthIndicator.h"
 #include "modules/hud/EffectStatus.h"
 
@@ -124,7 +123,6 @@ ModuleManager::ModuleManager() {
     this->items.push_back(std::make_shared<KillNotification>());
     this->items.push_back(std::make_shared<HealthIndicator>());
     this->items.push_back(std::make_shared<ArmorNametag>());
-    this->items.push_back(std::make_shared<ArmorDebug>());
     this->items.push_back(std::make_shared<EffectStatus>());
 
     for (auto& mod : items) {
