@@ -2,6 +2,7 @@
 #include "../../HUDModule.h"
 
 #include "util/ArmorEstimate.h"
+#include "util/ShieldStatus.h"
 
 #include <chrono>
 #include <cstdint>
@@ -20,6 +21,9 @@ struct TargetInfo {
     int armorDamage[4] { -1, -1, -1, -1 }; // Estimated durability lost per armor piece, -1 = no estimate.
     SDK::ItemStack* offhand = nullptr;
     uint64_t id = 0;      // The player's runtime id, 0 for the editor preview.
+    bool shieldShown = false; // Their offhand is a shield and Shield Status is on.
+    ShieldStatus::State shieldState = ShieldStatus::State::Ready;
+    float shieldSecondsLeft = 0.f; // While disabled.
     float opacity = 1.f;  // Fades from 1 to 0 over the last moments before the HUD goes away.
 };
 
@@ -73,6 +77,8 @@ private:
     static constexpr int StrengthII = 2;
     EnumData assumeStrength; // Which Strength potion you have on: none, I or II (+3 damage per level).
     ValueType showShieldDurability = BoolValue(true);
+    ValueType showShieldStatus = BoolValue(true);  // Green box behind their shield while it works, red when you disabled it.
+    ValueType shieldCooldown = FloatValue(5.f);    // Seconds a shield stays disabled after an axe hit.
     static constexpr int ShieldNumberRemaining = 0; // 312
     static constexpr int ShieldNumberPercent = 1;   // 93%
     static constexpr int ShieldNumberOff = 2;
@@ -103,6 +109,7 @@ private:
     // The armor durability guesses (see util/ArmorEstimate.h): one per player, followed every tick, so the wear from
     // all the hits adds up even while the HUD is hidden or you are fighting someone else.
     ArmorEstimate::Trackers armorTrackers;
+    ShieldStatus::Tracker shieldTracker; // Shields you disabled with an axe (see util/ShieldStatus.h).
     void updateArmorEstimate(TargetInfo& info);
     void onUpdate(Event& event);
 

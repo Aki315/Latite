@@ -308,6 +308,12 @@ namespace {
     void drawSlotBacks(Frame& f, ItemsRow const& row, float box, float radius) {
         for (auto const& slot : row.slots) {
             fillRound(f, { slot.x, slot.y, slot.x + box, slot.y + box }, radius, f.faint);
+            // Their shield: green while it works, red while you have it disabled.
+            if (slot.offhand && f.info->shieldShown) {
+                const bool disabled = f.info->shieldState == ShieldStatus::State::Disabled;
+                fillRound(f, { slot.x, slot.y, slot.x + box, slot.y + box }, radius,
+                          fade(f, disabled ? d2d::Color(0.94f, 0.27f, 0.27f, 0.6f) : d2d::Color(0.2f, 0.83f, 0.4f, 0.4f)));
+            }
         }
         if (row.dividerX >= 0.f && !row.slots.empty()) {
             const float y = row.slots.front().y;
@@ -388,6 +394,15 @@ namespace {
             f.mc->drawItem(slot.stack, { slot.x + inset, slot.y + inset }, icon / 48.f, f.opacity);
             if (slot.offhand ? f.shieldBarOn : f.armorBarOn) drawDurabilityBar(f, slot, box);
             if (!slot.offhand && f.armorBarOn && f.armorNumberKind != 0) drawArmorNumber(f, slot, box);
+            if (slot.offhand && f.info->shieldShown && f.info->shieldState == ShieldStatus::State::Disabled) {
+                // Seconds until their shield works again, over the item.
+                const std::wstring left = std::format(L"{:.1f}", f.info->shieldSecondsLeft);
+                const float size = 11.f * f.itemScale;
+                putText(f, slot.x + 0.75f, slot.y + 0.75f, box, box, left, fade(f, d2d::Color(0.f, 0.f, 0.f, 0.9f)), size,
+                        DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                putText(f, slot.x, slot.y, box, box, left, fade(f, d2d::Color(1.f, 0.55f, 0.55f, 1.f)), size,
+                        DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            }
             if (slot.stack->itemCount > 1) {
                 putText(f, slot.x, slot.y, box - 1.f, box, std::to_wstring(slot.stack->itemCount), fade(f, d2d::Colors::WHITE),
                         13.f * f.itemScale, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_PARAGRAPH_ALIGNMENT_FAR);
@@ -968,6 +983,12 @@ TargetHUD::TargetHUD()
     addEnumSetting("shieldNumber", LocalizeString::get("client.hudmodule.targetHud.shieldNumber.name"),
                    LocalizeString::get("client.hudmodule.targetHud.shieldNumber.desc"), shieldNumber,
                    "showShieldDurability"_istrue);
+    addSetting("showShieldStatus", LocalizeString::get("client.hudmodule.targetHud.showShieldStatus.name"),
+               LocalizeString::get("client.hudmodule.targetHud.showShieldStatus.desc"), showShieldStatus,
+               "showOffhand"_istrue);
+    addSliderSetting("shieldCooldown", LocalizeString::get("client.hudmodule.targetHud.shieldCooldown.name"),
+                     LocalizeString::get("client.hudmodule.targetHud.shieldCooldown.desc"), shieldCooldown, FloatValue(1.f),
+                     FloatValue(15.f), FloatValue(0.5f), "showShieldStatus"_istrue);
 
     // ---- Text and colors ----
     addSliderSetting("textSize", LocalizeString::get("client.hudmodule.targetHud.textSize.name"),
@@ -1043,6 +1064,33 @@ void TargetHUD::onAttack(Event& evG) {
 
     // What you hit with, for the armor durability estimate.
     armorTrackers.noteOwnHit(actor->getRuntimeID(), ArmorEstimate::heldWeapon(SDK::ClientInstance::get()->getLocalPlayer()));
+
+    // An axe on a raised shield that takes no damage disables it (see util/ShieldStatus.h).
+    if (std::get<BoolValue>(showShieldStatus)) {
+        std::string held;
+        if (auto* me = SDK::ClientInstance::get()->getLocalPlayer(); me && me->supplies && me->supplies->inventory) {
+            auto* stack = me->supplies->inventory->getItem(me->supplies->selectedSlot);
+            auto* item = stack ? stack->getItem() : nullptr;
+            if (item) held = item->namespacedId.getString();
+        }
+
+        bool raised = false;
+        if (auto* equipment = actor->tryGetComponent<SDK::ActorEquipmentComponent>(); equipment && equipment->handContainer) {
+            bool hasShield = false;
+            for (int slot = 0; slot < 2; ++slot) {
+                auto* stack = equipment->handContainer->getItem(slot);
+                auto* item = stack ? stack->getItem() : nullptr;
+                if (item && ShieldStatus::isShield(item->namespacedId.getString())) hasShield = true;
+            }
+            // Status flags 4 (using an item) and 71 (blocking): a raised shield sets one of them.
+            raised = hasShield && (actor->getStatusFlag(4) || actor->getStatusFlag(71));
+        }
+
+        const Vitals vitals = readVitals(actor);
+        shieldTracker.noteSwing(actor->getRuntimeID(), ShieldStatus::isAxe(held), raised,
+                                vitals.health < 0.f ? -1.f : vitals.health + vitals.absorption,
+                                std::chrono::steady_clock::now());
+    }
 
     targetId = actor->getRuntimeID();
     lastHit = std::chrono::steady_clock::now();
@@ -1142,6 +1190,17 @@ bool TargetHUD::gatherInfo(bool preview, TargetInfo& info) {
             auto* stack = equipment->handContainer->getItem(1);
             if (stack && stack->getItem()) info.offhand = stack;
         }
+    }
+
+    // Their shield: working, or disabled by an axe hit of yours.
+    if (std::get<BoolValue>(showShieldStatus) && info.offhand &&
+        ShieldStatus::isShield(info.offhand->getItem()->namespacedId.getString())) {
+        const auto now = std::chrono::steady_clock::now();
+        shieldTracker.update(info.id, vitals.health < 0.f ? -1.f : vitals.health + vitals.absorption,
+                             std::get<FloatValue>(shieldCooldown).value, now);
+        info.shieldShown = true;
+        info.shieldState = shieldTracker.state(info.id, now);
+        info.shieldSecondsLeft = shieldTracker.secondsLeft(info.id, now);
     }
     return true;
 }
