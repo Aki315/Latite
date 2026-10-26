@@ -118,6 +118,14 @@ namespace ShieldState {
             return State::Ready;
         }
 
+        // Whether the shield is disabled right now, whatever the player is holding or doing. Unlike state() this does
+        // not need the shield to be in a hand: the cooldown runs on, and it is still running when the shield comes back
+        // (after eating, drawing a bow, or swapping items).
+        bool isBroken(uint64_t id, Clock::time_point now) const {
+            auto it = entries.find(id);
+            return it != entries.end() && now < it->second.brokenUntil;
+        }
+
         float secondsLeft(uint64_t id, Clock::time_point now) const {
             auto it = entries.find(id);
             if (it == entries.end() || now >= it->second.brokenUntil) return 0.f;

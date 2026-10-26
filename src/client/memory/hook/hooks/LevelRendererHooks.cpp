@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "LevelRendererHooks.h"
 #include "client/event/Eventing.h"
+#include "client/event/events/BeforeRenderLevelEvent.h"
 #include "client/event/events/RenderLevelEvent.h"
 #include "client/render/Renderer.h"
 #include "client/Latite.h"
@@ -17,6 +18,11 @@ void LevelRendererHooks::LevelRenderer_renderLevel(SDK::LevelRenderer* lvl, SDK:
         if (Latite::getPluginManager().dispatchEvent(ev)) {
             return;
         }
+    }
+
+    {
+        BeforeRenderLevelEvent ev { lvl, scn };
+        Eventing::get().dispatch(ev);
     }
 
     renderLevelHook->oFunc<decltype(&LevelRenderer_renderLevel)>()(lvl, scn, unk);

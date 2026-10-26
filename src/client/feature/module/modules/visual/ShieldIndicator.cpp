@@ -139,8 +139,12 @@ ShieldIndicator::ShieldIndicator()
     addSetting("debugLog", LocalizeString::get("client.module.shieldIndicator.debugLog.name"),
                LocalizeString::get("client.module.shieldIndicator.debugLog.desc"), debugLog);
 
+    // Runs right BEFORE the world is drawn, not after (RenderLevelEvent): the game rewrites a player's status flags
+    // between frames while they eat, draw a bow or hold right click, so a flag set after the frame was drawn was gone
+    // again by the time the next one was, and the shield fell back to normal (or green) for as long as the item was in
+    // use. Set right before the draw, it is there when the shield is drawn.
     // Also called while the module is off, so that it can put the shields back to normal.
-    Eventing::get().listen<RenderLevelEvent, &ShieldIndicator::onRenderLevel>(this, 0, true);
+    Eventing::get().listen<BeforeRenderLevelEvent, &ShieldIndicator::onBeforeRenderLevel>(this, 0, true);
     listen<PacketReceiveEvent>((EventListenerFunc)&ShieldIndicator::onPacketReceive);
 }
 
@@ -167,7 +171,7 @@ void ShieldIndicator::onDisable() {
     // are safe to touch).
 }
 
-void ShieldIndicator::onRenderLevel(RenderLevelEvent&) {
+void ShieldIndicator::onBeforeRenderLevel(BeforeRenderLevelEvent&) {
     auto* ci = SDK::ClientInstance::get();
     if (!ci || !ci->minecraft || !ci->minecraft->timer) return;
     auto* level = ci->minecraft->getLevel();
@@ -251,7 +255,10 @@ void ShieldIndicator::onRenderLevel(RenderLevelEvent&) {
         const bool usingItem = p.actor->getStatusFlag(kFlagUsingItem) || p.actor->getStatusFlag(kFlagBlocking);
         tracker.observe(p.id, p.holds, usingItem, now);
 
-        const bool wanted = p.holds && (!p.self || withSelf);
+        // A disabled shield stays disabled while the cooldown runs, whether or not it is in a hand right now (eating or
+        // drawing a bow swaps what is held), so it comes back red, not normal-then-red.
+        const bool broken = tracker.isBroken(p.id, now);
+        const bool wanted = (p.holds || broken) && (!p.self || withSelf);
         const auto known = published.find(p.id);
 
         if (!wanted) {
@@ -263,15 +270,10 @@ void ShieldIndicator::onRenderLevel(RenderLevelEvent&) {
         }
 
         int value = StateNormal;
-        switch (tracker.state(p.id, now)) {
-        case ShieldState::State::Broken:
+        if (broken) {
             value = StateDisabled; // Disabled, whatever the player's hand is doing.
-            break;
-        case ShieldState::State::Blocking:
+        } else if (tracker.state(p.id, now) == ShieldState::State::Blocking) {
             value = StateBlocking;
-            break;
-        default:
-            break;
         }
 
         publishState(p.actor, value);

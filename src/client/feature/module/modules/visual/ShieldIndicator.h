@@ -1,5 +1,6 @@
 #pragma once
 #include "../../Module.h"
+#include "client/event/events/BeforeRenderLevelEvent.h"
 
 #include "util/ShieldState.h"
 
@@ -29,7 +30,7 @@ public:
     ShieldIndicator();
     ~ShieldIndicator() override = default;
 
-    void onRenderLevel(RenderLevelEvent& event);
+    void onBeforeRenderLevel(BeforeRenderLevelEvent& event);
     void onPacketReceive(Event& event);
     void onDisable() override;
 

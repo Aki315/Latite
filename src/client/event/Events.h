@@ -30,6 +30,7 @@
 #include "events/RenderGameEvent.h"
 #include "events/RenderGuiItemEvent.h"
 #include "events/RenderLayerEvent.h"
+#include "events/BeforeRenderLevelEvent.h"
 #include "events/RenderLevelEvent.h"
 #include "events/RenderOverlayEvent.h"
 #include "events/SendPacketEvent.h"

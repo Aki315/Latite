@@ -121,6 +121,24 @@ static void testShieldAwayWhileBroken() {
     CHECK(tr.state(1, T0 + 300ms) == State::Broken);
 }
 
+static void testBrokenIgnoresWhatIsHeld() {
+    // Eating, drawing a bow, swapping items: the cooldown keeps running and the shield is still disabled throughout.
+    Tracker tr;
+    tr.observe(1, true, false, T0);
+    tr.noteBroken(1, T0 + 100ms, 5.f);
+    CHECK(tr.isBroken(1, T0 + 200ms));
+    tr.observe(1, false, false, T0 + 300ms); // shield not in hand
+    CHECK(tr.isBroken(1, T0 + 300ms));
+    tr.observe(1, false, true, T0 + 400ms); // eating
+    CHECK(tr.isBroken(1, T0 + 400ms));
+    tr.observe(1, true, true, T0 + 2000ms); // back, with the use button still down
+    CHECK(tr.isBroken(1, T0 + 2000ms));
+    CHECK(tr.state(1, T0 + 2000ms) == State::Broken);
+    CHECK(!tr.isBroken(1, T0 + 5200ms)); // over after the cooldown, no sooner
+    CHECK(tr.isBroken(1, T0 + 5000ms));
+    CHECK(!tr.isBroken(2, T0)); // someone never seen
+}
+
 static void testPlayersAreIndependent() {
     Tracker tr;
     tr.observe(1, true, true, T0);
@@ -165,6 +183,7 @@ int main() {
     testBreakAndCooldown();
     testPressDuringCooldownDoesNotCount();
     testShieldAwayWhileBroken();
+    testBrokenIgnoresWhatIsHeld();
     testPlayersAreIndependent();
     testBreakBeforeFirstSighting();
     testCooldownLength();
