@@ -1,7 +1,10 @@
 #include "pch.h"
 #include "ShieldIndicator.h"
 
-#include <util/DrawUtil3D.h>
+#include "client/Latite.h"
+#include "client/event/events/RenderOverlayEvent.h"
+#include "client/render/asset/Assets.h"
+#include "util/WorldToScreen.h"
 #include "client/event/events/PacketReceiveEvent.h"
 #include "mc/Addresses.h"
 #include "mc/common/client/game/ClientInstance.h"
@@ -126,10 +129,9 @@ namespace {
 ShieldIndicator::ShieldIndicator()
     : Module("ShieldIndicator", LocalizeString::get("client.module.shieldIndicator.name"),
              LocalizeString::get("client.module.shieldIndicator.desc"), GAME) {
-    addSetting("blockColor", LocalizeString::get("client.module.shieldIndicator.blockColor.name"),
-               LocalizeString::get("client.module.shieldIndicator.blockColor.desc"), blockColor);
-    addSetting("brokenColor", LocalizeString::get("client.module.shieldIndicator.brokenColor.name"),
-               LocalizeString::get("client.module.shieldIndicator.brokenColor.desc"), brokenColor);
+    addSliderSetting("opacity", LocalizeString::get("client.module.shieldIndicator.opacity.name"),
+                     LocalizeString::get("client.module.shieldIndicator.opacity.desc"), opacity, FloatValue(0.2f),
+                     FloatValue(1.f), FloatValue(0.05f));
     addSliderSetting("cooldown", LocalizeString::get("client.module.shieldIndicator.cooldown.name"),
                      LocalizeString::get("client.module.shieldIndicator.cooldown.desc"), cooldown, FloatValue(1.f),
                      FloatValue(15.f), FloatValue(0.5f));
@@ -157,6 +159,7 @@ ShieldIndicator::ShieldIndicator()
 
     Eventing::get().listen<RenderLevelEvent, &ShieldIndicator::onRenderLevel>(this);
     listen<PacketReceiveEvent>((EventListenerFunc)&ShieldIndicator::onPacketReceive);
+    listen<RenderOverlayEvent>(&ShieldIndicator::onRenderOverlay);
 }
 
 void ShieldIndicator::onPacketReceive(Event& evG) {
@@ -176,6 +179,10 @@ void ShieldIndicator::onPacketReceive(Event& evG) {
 
 void ShieldIndicator::onDisable() {
     tracker.clear();
+    {
+        std::lock_guard panelLock(panelMutex);
+        panels.clear();
+    }
     std::lock_guard lock(soundMutex);
     pendingSounds.clear();
 }
@@ -255,17 +262,14 @@ void ShieldIndicator::onRenderLevel(RenderLevelEvent&) {
     // ---- Update every shield holder, and draw.
     const float maxDist = std::get<FloatValue>(maxDistance).value;
     const bool tinted = std::get<BoolValue>(showReady);
-    const d2d::Color blockCol = d2d::Color(std::get<ColorValue>(blockColor).getMainColor());
-    const d2d::Color brokenCol = d2d::Color(std::get<ColorValue>(brokenColor).getMainColor());
+    const float opacityValue = std::get<FloatValue>(opacity).value;
     const float sizeScale = std::get<FloatValue>(size).value;
     const float offF = std::get<FloatValue>(offsetForward).value;
     const float offS = std::get<FloatValue>(offsetSide).value;
     const float offU = std::get<FloatValue>(offsetUp).value;
     const Vec3 lpPos = lp->getPos();
 
-    auto fill = MCDrawUtil3D(ci->levelRenderer, SDK::ScreenContext::instance3d, SDK::MaterialPtr::getSelectionOverlayMaterial());
-    auto edge = MCDrawUtil3D(ci->levelRenderer, SDK::ScreenContext::instance3d, SDK::MaterialPtr::getSelectionBoxMaterial());
-    bool drew = false;
+    std::vector<Panel> fresh;
 
     for (auto const& p : players) {
         const bool usingItem = p.actor->getStatusFlag(kFlagUsingItem) || p.actor->getStatusFlag(kFlagBlocking);
@@ -279,19 +283,19 @@ void ShieldIndicator::onRenderLevel(RenderLevelEvent&) {
         }
 
         const auto state = tracker.state(p.id, now);
-        d2d::Color color;
+        bool broken = false;
         bool raised = false;
+        float alpha = opacityValue;
         switch (state) {
         case ShieldState::State::Broken:
-            color = brokenCol; // A broken shield is lowered, whatever the player's hand is doing.
+            broken = true; // A broken shield is lowered, whatever the player's hand is doing.
             break;
         case ShieldState::State::Blocking:
-            color = blockCol;
             raised = true;
             break;
         case ShieldState::State::Ready:
             if (!tinted) continue;
-            color = d2d::Color(blockCol.r, blockCol.g, blockCol.b, blockCol.a * 0.6f);
+            alpha *= 0.6f;
             break;
         default:
             continue;
@@ -319,6 +323,12 @@ void ShieldIndicator::onRenderLevel(RenderLevelEvent&) {
             halfHeight = 0.45f * sizeScale;
         }
 
+        // A raised shield is in front of the body: from behind the player it isn't visible.
+        if (raised && !p.self) {
+            const float toCamX = lpPos.x - p.feet.x, toCamZ = lpPos.z - p.feet.z;
+            if (toCamX * forward.x + toCamZ * forward.z < -0.2f) continue;
+        }
+
         const Vec3 w = scale(across, halfWidth);
         const Vec3 h { 0.f, halfHeight, 0.f };
         const Vec3 a = { center.x - w.x - h.x, center.y - w.y - h.y, center.z - w.z - h.z };
@@ -326,16 +336,67 @@ void ShieldIndicator::onRenderLevel(RenderLevelEvent&) {
         const Vec3 c = { center.x + w.x + h.x, center.y + w.y + h.y, center.z + w.z + h.z };
         const Vec3 d = { center.x - w.x + h.x, center.y - w.y + h.y, center.z - w.z + h.z };
 
-        // Both sides, so it shows whichever way the quad faces the camera.
-        fill.fillQuad(a, b, c, d, color);
-        fill.fillQuad(d, c, b, a, color);
-        edge.drawQuad(a, b, c, d, d2d::Color(color.r, color.g, color.b, 1.f));
-        drew = true;
+        const float dx = center.x - lpPos.x, dy = center.y - lpPos.y, dz = center.z - lpPos.z;
+        fresh.push_back({ a, b, c, d, std::sqrt(dx * dx + dy * dy + dz * dz), alpha, broken });
     }
 
-    if (drew) {
-        fill.flush();
-        edge.flush();
+    {
+        std::lock_guard panelLock(panelMutex);
+        panels.swap(fresh);
+        panelsTime = now;
     }
     tracker.prune(now);
+}
+
+void ShieldIndicator::onRenderOverlay(Event& evG) {
+    auto* ci = SDK::ClientInstance::get();
+    if (!ci || !ci->minecraftGame || !ci->minecraftGame->isCursorGrabbed()) return; // Not in a menu.
+
+    std::vector<Panel> toDraw;
+    {
+        std::lock_guard panelLock(panelMutex);
+        // The panels come from this frame's world render; don't keep drawing old ones if that stops running.
+        if (std::chrono::steady_clock::now() - panelsTime > std::chrono::milliseconds(200)) return;
+        toDraw = this->panels;
+    }
+    if (toDraw.empty()) return;
+
+    auto& ev = reinterpret_cast<RenderOverlayEvent&>(evG);
+    ID2D1DeviceContext* ctx = ev.getDeviceContext();
+    if (!ctx) return;
+
+    ID2D1Bitmap* working = Latite::getAssets().shieldOn.getBitmap();
+    ID2D1Bitmap* disabled = Latite::getAssets().shieldOff.getBitmap();
+    if (!working || !disabled) return;
+
+    // Far to near, so a closer shield is drawn over a further one.
+    std::sort(toDraw.begin(), toDraw.end(), [](Panel const& l, Panel const& r) { return l.distance > r.distance; });
+
+    D2D1::Matrix3x2F oldTransform;
+    ctx->GetTransform(&oldTransform);
+
+    for (auto const& panel : toDraw) {
+        const auto a = WorldToScreen::convert(panel.a);
+        const auto b = WorldToScreen::convert(panel.b);
+        const auto c = WorldToScreen::convert(panel.c);
+        const auto d = WorldToScreen::convert(panel.d);
+        if (!a || !b || !c || !d) continue; // Partly behind the camera.
+
+        ID2D1Bitmap* bitmap = panel.broken ? disabled : working;
+        const D2D1_SIZE_F size = bitmap->GetSize();
+        if (size.width <= 0.f || size.height <= 0.f) continue;
+
+        // The image's top-left corner goes to the panel's top-left (d), its top-right to c and its bottom-left to a.
+        // That is a skewed rectangle, which is how a flat panel looks from the side, so the shield turns with the player.
+        const D2D1::Matrix3x2F place(
+            (c->x - d->x) / size.width, (c->y - d->y) / size.width,
+            (a->x - d->x) / size.height, (a->y - d->y) / size.height,
+            d->x, d->y);
+        ctx->SetTransform(place * oldTransform);
+
+        const D2D1_RECT_F whole = D2D1::RectF(0.f, 0.f, size.width, size.height);
+        ctx->DrawBitmap(bitmap, &whole, panel.alpha);
+    }
+
+    ctx->SetTransform(oldTransform);
 }

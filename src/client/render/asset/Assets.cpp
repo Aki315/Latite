@@ -16,6 +16,8 @@ Assets::Assets()
     , checkmarkIcon(GET_RESOURCE(checkmark_png))
     , logoWhite(GET_RESOURCE(latitewhite_png))
     , document(GET_RESOURCE(document_png))
+    , shieldOn(GET_RESOURCE(shield_on_png))
+    , shieldOff(GET_RESOURCE(shield_off_png))
 
 {
     allAssets.push_back(&this->latiteLogo);
@@ -28,6 +30,8 @@ Assets::Assets()
     allAssets.push_back(&this->checkmarkIcon);
     allAssets.push_back(&this->logoWhite);
     allAssets.push_back(&this->document);
+    allAssets.push_back(&this->shieldOn);
+    allAssets.push_back(&this->shieldOff);
 }
 
 Assets::~Assets() {
