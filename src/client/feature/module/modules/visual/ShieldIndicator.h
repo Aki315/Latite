@@ -3,13 +3,19 @@
 
 #include "util/ShieldState.h"
 
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
-// Marks other players' shields in the world with a shield image: a green shield while it is raised and working, a red
-// one while an axe has it disabled.
+namespace SDK {
+    class Actor;
+}
+
+// Shows other players' shield state on the shield itself: green while it is raised and working, red while an axe has it
+// disabled.
 //
 // Made for servers that run Blurry's Java PvP addon. That addon keeps the shield's state on the server and never sends
 // it to clients, so this works from the two things that do reach you (see util/ShieldState.h):
@@ -17,11 +23,18 @@
 //   * when an axe breaks a shield the addon plays "random.break" at pitch 1.2 at that player. The red state runs for
 //     the addon's cooldown (5 seconds by default; set Shield Disabled Time to the server's value).
 //
-// Latite can't retexture the shield model itself (that is what a resource pack does, and only for the vanilla shield),
-// so the image is drawn over the shield instead: a flat panel with the shield texture on it, standing where the shield
-// is in the raised pose and turning with the player. It is placed from the player's body direction, not from the
-// shield model itself (the client doesn't expose that), so the Size and Offset settings are there to line it up.
-// The images are assets/shield_on.png and assets/shield_off.png; replace them to change how it looks.
+// How it is shown, in order of preference:
+//   1. Recolor the real shield. The game asks "what overlay color does this model get" once for every model it draws,
+//      and the module answers red or green when that model is the shield of a player whose shield is disabled or raised.
+//      That is the same thing a resource pack does when it swaps the shield's texture, only the module knows the
+//      disabled state, which a resource pack cannot see. The shield's model is recognised by the name of its render
+//      controller ("controller.render.bf_shield" in Blurry's pack), found by looking through the controller object for
+//      its text (util/ObjectStrings.h). Shields that share the generic "controller.render.item_default" cannot be told
+//      apart from other held items, so those are not recolored.
+//   2. Draw an image over the shield, but only for a shield the recolor did not reach (Draw Image Instead, on by
+//      default), so a shield is never left unmarked. It is a flat panel standing where the shield is in the raised
+//      pose, placed from the player's body direction (the client doesn't expose the shield model's position), so the
+//      Size and Offset settings are there to line it up. The images are assets/shield_on.png and assets/shield_off.png.
 class ShieldIndicator final : public Module {
 public:
     ShieldIndicator();
@@ -30,6 +43,7 @@ public:
     void onRenderLevel(RenderLevelEvent& event);
     void onRenderOverlay(Event& event);
     void onPacketReceive(Event& event);
+    void onOverlayColor(Event& event);
     void onDisable() override;
 
 private:
@@ -41,6 +55,8 @@ private:
         std::chrono::steady_clock::time_point when;
     };
 
+    ValueType tintShield = BoolValue(true);      // Recolor the real shield (red disabled, green raised).
+    ValueType imageFallback = BoolValue(true);   // Draw the image over a shield the recolor did not reach.
     ValueType ownThirdPerson = BoolValue(true);  // Also color your own shield while you are in third person.
     ValueType maxDistance = FloatValue(32.f);    // Players further away than this aren't drawn.
     ValueType cooldown = FloatValue(5.f);        // How long a broken shield stays red (the addon's default is 5).
@@ -60,10 +76,23 @@ private:
         float distance;
         float alpha;
         bool broken;
+        const SDK::Actor* actor; // Whose shield it is (only compared, never used).
     };
     std::mutex panelMutex;
     std::vector<Panel> panels; // Built in the world render, drawn in the overlay render.
     std::chrono::steady_clock::time_point panelsTime {};
+
+    // Recoloring the real shield. The world render decides who gets which color each frame; the overlay color hook,
+    // which runs while the game draws each model, reads that. All of it is under tintMutex.
+    struct ControllerGuess {
+        bool shield = false; // Is this render controller the shield's?
+        std::chrono::steady_clock::time_point checked {};
+    };
+    std::mutex tintMutex;
+    std::unordered_map<const SDK::Actor*, bool> tintTargets; // Actor -> shield disabled (red) or raised (green).
+    std::unordered_map<const SDK::Actor*, std::chrono::steady_clock::time_point> tintedAt; // Last time one was recolored.
+    std::unordered_map<const void*, ControllerGuess> controllers;
+    std::atomic<bool> anyTint { false }; // Whether tintTargets has anything, so the hook can skip the lock when not.
 
     ShieldState::Tracker tracker;
 

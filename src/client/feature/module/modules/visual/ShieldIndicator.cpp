@@ -2,8 +2,11 @@
 #include "ShieldIndicator.h"
 
 #include "client/Latite.h"
+#include "client/event/events/OverlayColorEvent.h"
 #include "client/event/events/RenderOverlayEvent.h"
+#include "client/feature/setting/Setting.h"
 #include "client/render/asset/Assets.h"
+#include "util/ObjectStrings.h"
 #include "util/WorldToScreen.h"
 #include "client/event/events/PacketReceiveEvent.h"
 #include "mc/Addresses.h"
@@ -22,9 +25,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -82,6 +88,47 @@ namespace {
         }
     }
 
+    // Reads game memory without risking a crash. Only committed, readable memory that holds the whole read is touched,
+    // and a read that faults anyway is caught. No objects with destructors in here, which __try requires.
+    bool safeRead(const void* from, void* to, size_t bytes) {
+        if (!from || bytes == 0) return false;
+
+        MEMORY_BASIC_INFORMATION info {};
+        if (VirtualQuery(from, &info, sizeof(info)) == 0) return false;
+        if (info.State != MEM_COMMIT) return false;
+        if (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return false;
+        constexpr DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
+                                   PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+        if (!(info.Protect & readable)) return false;
+
+        const auto begin = reinterpret_cast<uintptr_t>(from);
+        const auto regionEnd = reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize;
+        if (begin + bytes > regionEnd) return false; // Would run into the next region, which may not be readable.
+
+        __try {
+            std::memcpy(to, from, bytes);
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
+    struct ControllerText {
+        bool shield = false;                // Does it say it is the shield's render controller?
+        std::vector<std::string> names;     // Every text with "shield" in it that was found (for the debug log).
+    };
+
+    // Looks through a render controller object for its name. The layout of that object is not known, so this reads the
+    // text out of it instead of a field at a fixed offset (see util/ObjectStrings.h).
+    ControllerText inspectController(const void* controller) {
+        ControllerText result;
+        result.names = ObjectStrings::findStrings(controller, "shield", safeRead);
+        for (auto const& name : result.names) {
+            if (ObjectStrings::looksLikeShieldName(name)) result.shield = true;
+        }
+        return result;
+    }
+
     bool isShieldItem(SDK::ItemStack* stack) {
         auto* item = stack ? stack->getItem() : nullptr;
         return item && item->namespacedId.getString().find("shield") != std::string::npos;
@@ -129,6 +176,11 @@ namespace {
 ShieldIndicator::ShieldIndicator()
     : Module("ShieldIndicator", LocalizeString::get("client.module.shieldIndicator.name"),
              LocalizeString::get("client.module.shieldIndicator.desc"), GAME) {
+    addSetting("tintShield", LocalizeString::get("client.module.shieldIndicator.tintShield.name"),
+               LocalizeString::get("client.module.shieldIndicator.tintShield.desc"), tintShield);
+    addSetting("imageFallback", LocalizeString::get("client.module.shieldIndicator.imageFallback.name"),
+               LocalizeString::get("client.module.shieldIndicator.imageFallback.desc"), imageFallback,
+               "tintShield"_istrue);
     addSliderSetting("opacity", LocalizeString::get("client.module.shieldIndicator.opacity.name"),
                      LocalizeString::get("client.module.shieldIndicator.opacity.desc"), opacity, FloatValue(0.2f),
                      FloatValue(1.f), FloatValue(0.05f));
@@ -162,6 +214,62 @@ ShieldIndicator::ShieldIndicator()
     Eventing::get().listen<RenderLevelEvent, &ShieldIndicator::onRenderLevel>(this);
     listen<PacketReceiveEvent>((EventListenerFunc)&ShieldIndicator::onPacketReceive);
     listen<RenderOverlayEvent>(&ShieldIndicator::onRenderOverlay);
+    listen<OverlayColorEvent>((EventListenerFunc)&ShieldIndicator::onOverlayColor);
+}
+
+// Called by the game for every model it draws, to ask what overlay color to put over it. For the shield of a player whose
+// shield is disabled (red) or raised (green) the answer is that color.
+void ShieldIndicator::onOverlayColor(Event& evG) {
+    if (!anyTint.load(std::memory_order_relaxed)) return;
+
+    auto& ev = reinterpret_cast<OverlayColorEvent&>(evG);
+    const SDK::Actor* actor = ev.getActor();
+    const void* controller = ev.getController();
+    if (!actor || !controller) return;
+
+    const auto now = std::chrono::steady_clock::now();
+
+    bool broken = false;
+    bool known = false;
+    bool isShield = false;
+    {
+        std::lock_guard lock(tintMutex);
+        auto target = tintTargets.find(actor);
+        if (target == tintTargets.end()) return; // Not a player whose shield gets a color.
+        broken = target->second;
+
+        // Resource packs can be reloaded, and then a controller's memory can be used for something else: look again now
+        // and then instead of trusting an old answer forever.
+        auto guess = controllers.find(controller);
+        if (guess != controllers.end() && now - guess->second.checked < std::chrono::seconds(20)) {
+            known = true;
+            isShield = guess->second.shield;
+        }
+    }
+
+    if (!known) {
+        const ControllerText text = inspectController(controller);
+        isShield = text.shield;
+        {
+            std::lock_guard lock(tintMutex);
+            if (controllers.size() > 512) controllers.clear();
+            controllers[controller] = { isShield, now };
+        }
+        if (std::get<BoolValue>(debugLog)) {
+            std::string names;
+            for (auto const& name : text.names) names += (names.empty() ? "'" : ", '") + name + "'";
+            Logger::Info("[ShieldIndicator] render controller at {:x}: {} (text with \"shield\" in it: {})",
+                         reinterpret_cast<uintptr_t>(controller), isShield ? "THE SHIELD, recolored" : "not the shield",
+                         names.empty() ? "none found" : names);
+        }
+    }
+    if (!isShield) return;
+
+    const float alpha = std::get<FloatValue>(opacity).value;
+    ev.getColor() = broken ? Color(0.92f, 0.12f, 0.12f, alpha) : Color(0.18f, 0.85f, 0.32f, alpha);
+
+    std::lock_guard lock(tintMutex);
+    tintedAt[actor] = now;
 }
 
 void ShieldIndicator::onPacketReceive(Event& evG) {
@@ -184,6 +292,13 @@ void ShieldIndicator::onDisable() {
     {
         std::lock_guard panelLock(panelMutex);
         panels.clear();
+    }
+    {
+        std::lock_guard lock(tintMutex);
+        tintTargets.clear();
+        tintedAt.clear();
+        controllers.clear();
+        anyTint = false;
     }
     std::lock_guard lock(soundMutex);
     pendingSounds.clear();
@@ -270,8 +385,11 @@ void ShieldIndicator::onRenderLevel(RenderLevelEvent&) {
     const float offS = std::get<FloatValue>(offsetSide).value;
     const float offU = std::get<FloatValue>(offsetUp).value;
     const Vec3 lpPos = lp->getPos();
+    const bool tintOn = std::get<BoolValue>(tintShield);
+    const bool imageOn = !tintOn || std::get<BoolValue>(imageFallback);
 
     std::vector<Panel> fresh;
+    std::vector<std::pair<const SDK::Actor*, bool>> freshTints; // Whose shield to recolor: actor, disabled (else raised).
 
     for (auto const& p : players) {
         const bool usingItem = p.actor->getStatusFlag(kFlagUsingItem) || p.actor->getStatusFlag(kFlagBlocking);
@@ -302,6 +420,13 @@ void ShieldIndicator::onRenderLevel(RenderLevelEvent&) {
             break;
         default:
             continue;
+        }
+
+        // Ask for the real shield to be recolored. The image below is then only a backup for a shield that doesn't get
+        // recolored (the overlay hook records which ones did, see onRenderOverlay).
+        if (tintOn && (broken || raised)) {
+            freshTints.emplace_back(p.actor, broken);
+            if (!imageOn) continue;
         }
 
         // The panel sits where the shield is: in front of the body when raised, against the side of the body when not.
@@ -340,13 +465,22 @@ void ShieldIndicator::onRenderLevel(RenderLevelEvent&) {
         const Vec3 d = { center.x - w.x + h.x, center.y - w.y + h.y, center.z - w.z + h.z };
 
         const float dx = center.x - lpPos.x, dy = center.y - lpPos.y, dz = center.z - lpPos.z;
-        fresh.push_back({ a, b, c, d, std::sqrt(dx * dx + dy * dy + dz * dz), alpha, broken });
+        fresh.push_back({ a, b, c, d, std::sqrt(dx * dx + dy * dy + dz * dz), alpha, broken, p.actor });
     }
 
     {
         std::lock_guard panelLock(panelMutex);
         panels.swap(fresh);
         panelsTime = now;
+    }
+    {
+        std::lock_guard lock(tintMutex);
+        tintTargets.clear();
+        for (auto const& [actor, isBroken] : freshTints) tintTargets[actor] = isBroken;
+        for (auto it = tintedAt.begin(); it != tintedAt.end();) {
+            it = now - it->second > std::chrono::seconds(2) ? tintedAt.erase(it) : std::next(it);
+        }
+        anyTint.store(!tintTargets.empty(), std::memory_order_relaxed);
     }
     tracker.prune(now);
 }
@@ -375,10 +509,23 @@ void ShieldIndicator::onRenderOverlay(Event& evG) {
     // Far to near, so a closer shield is drawn over a further one.
     std::sort(toDraw.begin(), toDraw.end(), [](Panel const& l, Panel const& r) { return l.distance > r.distance; });
 
+    // Shields that were recolored this frame don't need the image on top.
+    std::unordered_map<const SDK::Actor*, std::chrono::steady_clock::time_point> recolored;
+    if (std::get<BoolValue>(tintShield)) {
+        std::lock_guard lock(tintMutex);
+        recolored = tintedAt;
+    }
+    const auto drawTime = std::chrono::steady_clock::now();
+
     D2D1::Matrix3x2F oldTransform;
     ctx->GetTransform(&oldTransform);
 
     for (auto const& panel : toDraw) {
+        if (auto done = recolored.find(panel.actor);
+            done != recolored.end() && drawTime - done->second < std::chrono::milliseconds(250)) {
+            continue;
+        }
+
         const auto a = WorldToScreen::convert(panel.a);
         const auto b = WorldToScreen::convert(panel.b);
         const auto c = WorldToScreen::convert(panel.c);
