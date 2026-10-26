@@ -633,7 +633,7 @@
         "client.module.cobwebOutline.range.name": "Range",
         "client.module.cobwebOutline.range.desc": "How many blocks around you are searched for cobwebs. Higher values cost more performance.",
         "client.module.shieldIndicator.name": "Shield Indicator",
-        "client.module.shieldIndicator.desc": "Switches the texture of Blurry's Java PvP shield (bf:shield) on the real shield: green while it is raised and working, red while an axe has it disabled. It only works out the state: it needs the matching resource pack (its bf_shield render controller reads variable.bf_shield_state) to change anything you can see.",
+        "client.module.shieldIndicator.desc": "Switches the texture of Blurry's Java PvP shield (bf:shield) on the real shield: green while it is raised and working, red while an axe has it disabled. It only works out the state: it needs the matching resource pack to change anything you can see.",
         "client.module.shieldIndicator.cooldown.name": "Shield Disabled Time",
         "client.module.shieldIndicator.cooldown.desc": "How many seconds a shield stays disabled (red). Blurry's Java PvP uses 5 by default; set it to the server's value. The server never sends this to your client, so it is counted from the moment you hear the shield break.",
         "client.module.shieldIndicator.includeSelf.name": "Include Yourself",

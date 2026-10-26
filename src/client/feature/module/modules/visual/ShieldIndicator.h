@@ -13,10 +13,11 @@
 // the shield is raised and a red one while an axe has it disabled.
 //
 // The texture is changed on the real shield model by the game itself, not drawn or tinted over it. This module only
-// works out each player's shield state and writes it into the player's Molang variable `variable.bf_shield_state`
-// (0 normal, 1 blocking, 2 disabled). A resource pack decides what that means for the picture: its
-// controller.render.bf_shield, which is the render controller of the bf:shield attachable (and of nothing else), picks
-// the texture from that variable. Without that resource pack this module changes nothing you can see.
+// works out each player's shield state and tells the resource pack through the player's status flags: a raised shield
+// is already visible to the pack as query.is_using_item, and a disabled one is marked by setting the "saddled" flag
+// (query.is_saddled). The resource pack's controller.render.bf_shield, the render controller of the bf:shield
+// attachable (and of nothing else), picks the texture from those two. Without that resource pack this module changes
+// nothing you can see.
 //
 // Blurry's addon keeps a shield's state on the server and never sends it to clients, so it is worked out from the two
 // things that do reach you (see util/ShieldState.h):
@@ -46,8 +47,8 @@ private:
     ValueType debugLog = BoolValue(false);       // Log the break sounds it sees and who they were matched to.
 
     ShieldState::Tracker tracker;
-    std::unordered_map<uint64_t, int> published; // Runtime id -> the state last written to that player.
-    bool molangUnavailableLogged = false;
+    std::unordered_map<uint64_t, int> published; // Runtime id -> the state last worked out for that player.
+    bool announced = false;
 
     std::mutex soundMutex;
     std::vector<BreakSound> pendingSounds; // Filled by the packet event, emptied each frame.

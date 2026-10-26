@@ -3,7 +3,6 @@
 
 #include "client/event/events/PacketReceiveEvent.h"
 #include "mc/Addresses.h"
-#include "util/Crypto.h"
 #include "mc/common/client/game/ClientInstance.h"
 #include "mc/common/client/game/Options.h"
 #include "mc/common/client/renderer/MaterialPtr.h"
@@ -110,11 +109,12 @@ namespace {
         bool self;
     };
 
-    // The Molang variable the shield's render controller reads. Written on the player, not on the item: the only thing
-    // that reads it is the resource pack's controller.render.bf_shield (attached to bf:shield), so nothing else
-    // changes texture. 0 = normal, 1 = blocking (green), 2 = disabled (red). The hash is FNV-1 of the full name, like
-    // the other Molang variables this client sets (see DrawContext.cpp).
-    constexpr char kStateVariable[] = "variable.bf_shield_state";
+    // How a disabled shield is told to the resource pack. The pack's render controller can read the player's native
+    // queries (query.is_using_item is what turns a raised shield green), but it can't read anything custom: a Molang
+    // variable it doesn't know makes the shield invisible. So a disabled shield sets the "saddled" status flag on the
+    // player, which the pack reads as query.is_saddled. Nothing renders or behaves differently on a player for that
+    // flag, and it is the module that sets and clears it, every frame (the server resends the flags now and then).
+    constexpr int kFlagDisabledMarker = 8; // ActorFlags::SADDLED
 
     enum StateValue : int {
         StateNormal = 0,
@@ -122,19 +122,9 @@ namespace {
         StateDisabled = 2,
     };
 
-    uint64_t stateVariableHash() {
-        static const uint64_t hash = util::fnv1a_64(std::string(kStateVariable));
-        return hash;
-    }
-
     void publishState(SDK::Actor* actor, int value) {
-        actor->molangVariableMap.setMolangVariable(stateVariableHash(), kStateVariable, static_cast<float>(value));
-    }
-
-    // The two game functions that setMolangVariable calls: without them it would crash instead of failing.
-    bool molangAvailable() {
-        return Signatures::MolangVariable__findOrAddVariableIndex.result &&
-               Signatures::MolangVariableMap__getOrAddMolangVariable.result;
+        const bool disabled = value == StateDisabled;
+        if (actor->getStatusFlag(kFlagDisabledMarker) != disabled) actor->setStatusFlag(kFlagDisabledMarker, disabled);
     }
 } // namespace
 
@@ -187,13 +177,9 @@ void ShieldIndicator::onRenderLevel(RenderLevelEvent&) {
         return;
     }
 
-    if (!molangAvailable()) {
-        if (!molangUnavailableLogged && isEnabled()) {
-            molangUnavailableLogged = true;
-            Logger::Info("[ShieldIndicator] the game functions that set Molang variables were not found, so the "
-                         "shield texture can't be switched");
-        }
-        return;
+    if (!announced && isEnabled()) {
+        announced = true;
+        Logger::Info("[ShieldIndicator] running (a disabled shield is marked with the saddled flag for the resource pack)");
     }
 
     // Switched off: every shield this module touched goes back to its normal texture, once.
