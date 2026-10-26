@@ -133,7 +133,7 @@ ShieldIndicator::ShieldIndicator()
              LocalizeString::get("client.module.shieldIndicator.desc"), GAME) {
     addSliderSetting("cooldown", LocalizeString::get("client.module.shieldIndicator.cooldown.name"),
                      LocalizeString::get("client.module.shieldIndicator.cooldown.desc"), cooldown, FloatValue(1.f),
-                     FloatValue(15.f), FloatValue(0.5f));
+                     FloatValue(15.f), FloatValue(0.1f));
     addSetting("includeSelf", LocalizeString::get("client.module.shieldIndicator.includeSelf.name"),
                LocalizeString::get("client.module.shieldIndicator.includeSelf.desc"), includeSelf);
     addSetting("debugLog", LocalizeString::get("client.module.shieldIndicator.debugLog.name"),
