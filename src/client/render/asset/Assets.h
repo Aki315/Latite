@@ -19,8 +19,6 @@ public:
     Asset checkmarkIcon;
     Asset logoWhite;
     Asset document;
-    Asset shieldOn;  // Shield Indicator: a working shield.
-    Asset shieldOff; // Shield Indicator: a disabled shield.
 
     void loadAll();
     void unloadAll();
