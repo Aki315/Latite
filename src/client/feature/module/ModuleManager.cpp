@@ -31,6 +31,7 @@
 #include "modules/visual/HurtColor.h"
 #include "modules/visual/Hitboxes.h"
 #include "modules/visual/CobwebOutline.h"
+#include "modules/visual/ShieldIndicator.h"
 #include "modules/visual/ChunkBorders.h"
 #include "modules/visual/Hitboxes.h"
 #include "modules/visual/BlockOutline.h"
@@ -96,6 +97,7 @@ ModuleManager::ModuleManager() {
     this->items.push_back(std::make_shared<MovablePaperdoll>());
     this->items.push_back(std::make_shared<Hitboxes>());
     this->items.push_back(std::make_shared<CobwebOutline>());
+    this->items.push_back(std::make_shared<ShieldIndicator>());
     this->items.push_back(std::make_shared<BlockOutline>());
     this->items.push_back(std::make_shared<MovableScoreboard>());
     this->items.push_back(std::make_shared<Nickname>());
