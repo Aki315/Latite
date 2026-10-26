@@ -135,6 +135,8 @@ ShieldIndicator::ShieldIndicator()
     addSliderSetting("cooldown", LocalizeString::get("client.module.shieldIndicator.cooldown.name"),
                      LocalizeString::get("client.module.shieldIndicator.cooldown.desc"), cooldown, FloatValue(1.f),
                      FloatValue(15.f), FloatValue(0.5f));
+    addSetting("markRaised", LocalizeString::get("client.module.shieldIndicator.markRaised.name"),
+               LocalizeString::get("client.module.shieldIndicator.markRaised.desc"), markRaised);
     addSetting("showReady", LocalizeString::get("client.module.shieldIndicator.showReady.name"),
                LocalizeString::get("client.module.shieldIndicator.showReady.desc"), showReady);
     addSetting("ownThirdPerson", LocalizeString::get("client.module.shieldIndicator.ownThirdPerson.name"),
@@ -291,6 +293,7 @@ void ShieldIndicator::onRenderLevel(RenderLevelEvent&) {
             broken = true; // A broken shield is lowered, whatever the player's hand is doing.
             break;
         case ShieldState::State::Blocking:
+            if (!std::get<BoolValue>(markRaised)) continue; // A resource pack greens the real shield instead.
             raised = true;
             break;
         case ShieldState::State::Ready:

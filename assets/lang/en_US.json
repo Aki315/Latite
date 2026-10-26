@@ -638,6 +638,8 @@
         "client.module.shieldIndicator.opacity.desc": "How solid the shield image is. Lower it to see the real shield through it.",
         "client.module.shieldIndicator.cooldown.name": "Shield Disabled Time",
         "client.module.shieldIndicator.cooldown.desc": "How many seconds a broken shield stays red. Blurry's Java PvP uses 5 by default; set it to the server's value. The server never sends this to your client, so it is counted from the moment you hear the shield break.",
+        "client.module.shieldIndicator.markRaised.name": "Mark Raised Shields",
+        "client.module.shieldIndicator.markRaised.desc": "Marks a raised shield with the green shield image. Turn this off if you use a resource pack that turns the real shield green (BF Shield Green): then only a disabled shield gets marked, in red.",
         "client.module.shieldIndicator.showReady.name": "Mark Lowered Shields",
         "client.module.shieldIndicator.showReady.desc": "Also mark a shield that is held but not raised (fainter, with the green shield). Off: only a raised or disabled shield is marked.",
         "client.module.shieldIndicator.ownThirdPerson.name": "Show On Yourself (Third Person)",

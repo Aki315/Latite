@@ -44,6 +44,7 @@ private:
     ValueType ownThirdPerson = BoolValue(true);  // Also color your own shield while you are in third person.
     ValueType maxDistance = FloatValue(32.f);    // Players further away than this aren't drawn.
     ValueType cooldown = FloatValue(5.f);        // How long a broken shield stays red (the addon's default is 5).
+    ValueType markRaised = BoolValue(true);      // Mark raised shields green (off: only mark disabled ones, e.g. when a resource pack greens the real shield).
     ValueType showReady = BoolValue(false);      // Also mark a held, lowered shield (not only a raised one).
     ValueType opacity = FloatValue(0.9f);        // How solid the shield image is.
     ValueType size = FloatValue(1.f);
