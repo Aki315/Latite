@@ -198,6 +198,7 @@ namespace ArmorEstimate {
         bool unbreaking = true; // Their armor has Unbreaking III (about 30% less wear).
         int strength = 0;       // Strength potion level, +3 damage per level.
         float wearScale = 1.f;  // Multiplies the wear of every hit; raise it if the guess keeps showing too much durability.
+        bool debug = false;     // Log every hit that is counted and every time a guess starts over, and why.
     };
 
     // Is a swing made right now a critical hit? The server counts it as one when you are falling and not on the ground.
@@ -286,7 +287,11 @@ namespace ArmorEstimate {
             for (auto& p : pieces) p = {};
             lastHealth = -1.f;
             lastLife = -1.f;
+            jumpTicks = 0;
         }
+
+        // Whose guess this is (the runtime id), for the log only.
+        uint64_t owner = 0;
 
         // The server sent this player's whole armor again: forget the wear, trust what it says.
         void resync() {
@@ -305,15 +310,43 @@ namespace ArmorEstimate {
         void update(SDK::ItemStack* const* armor, float totalHealth, bool ownHit, Weapon const& weapon,
                     float otherHitDamage, Assumptions const& assume, float health = -1.f, float absorption = 0.f) {
             const float previousLife = lastLife; // Their health at the last update (before it is overwritten below).
+            const char kSlotNames[] = "HCLB";
             // Dead (health 0) or alive again (a jump of 10 or more, which healing can't do but a respawn does): the
             // wear belongs to the last life, so start over from what the server says now.
+            //
+            // A respawn has to stay: one odd reading (the attribute list shifts while someone eats or gets golden hearts)
+            // must not wipe the wear, so a jump of 10 or more is only believed after it has held for 3 updates in a row.
+            // While it is being checked, the last believed health stays, and no hit is counted.
+            bool jumpPending = false;
             if (health >= 0.f) {
                 const bool died = health <= 0.05f;
-                const bool revived = lastLife >= 0.f && health - lastLife >= 10.f;
-                if (died || revived) reset();
-                lastLife = health;
+                const bool jumped = lastLife >= 0.f && health - lastLife >= 10.f;
+                if (died) {
+                    if (assume.debug) Logger::Info("[ArmorEstimate] player {}: health {:.1f}: counted as dead, wear wiped", owner, health);
+                    reset();
+                    lastLife = health;
+                } else if (jumped) {
+                    if (++jumpTicks >= 3) {
+                        if (assume.debug) {
+                            Logger::Info("[ArmorEstimate] player {}: health {:.1f} -> {:.1f} and it stayed: counted as a "
+                                         "respawn, wear wiped", owner, lastLife, health);
+                        }
+                        reset();
+                        lastLife = health;
+                    } else {
+                        jumpPending = true;
+                        if (assume.debug && jumpTicks == 1) {
+                            Logger::Info("[ArmorEstimate] player {}: health read jumped {:.1f} -> {:.1f}, waiting to see "
+                                         "if it stays (a bad reading is ignored)", owner, lastLife, health);
+                        }
+                    }
+                } else {
+                    jumpTicks = 0;
+                    lastLife = health;
+                }
             } else {
                 lastLife = -1.f;
+                jumpTicks = 0;
             }
 
             float defense = 0.f, toughness = 0.f;
@@ -333,6 +366,13 @@ namespace ArmorEstimate {
                 const bool glint = item->isGlint(armor[i]);
                 if (!piece.known || piece.id != id || piece.glint != glint || server < piece.lastServerDamage) {
                     // A new piece (or a repaired one): start over.
+                    if (assume.debug) {
+                        const char* why = !piece.known ? "first seen" : piece.id != id ? "a different item"
+                                          : piece.glint != glint ? "its enchanted (glowing) state changed"
+                                                                 : "the server's damage went down (repaired?)";
+                        Logger::Info("[ArmorEstimate] player {}: {} {} starts over ({}): server damage {}, wear dropped {:.1f}",
+                                     owner, kSlotNames[i], shortName(id), why, server, piece.wear);
+                    }
                     piece.known = true;
                     piece.id = id;
                     piece.glint = glint;
@@ -340,6 +380,11 @@ namespace ArmorEstimate {
                     piece.wear = 0.f;
                 } else if (server > piece.lastServerDamage) {
                     // The server sent newer numbers: trust them over the guess.
+                    if (assume.debug) {
+                        Logger::Info("[ArmorEstimate] player {}: {} server damage {} -> {}: trusting the server, guess was "
+                                     "{} (wear {:.1f} dropped)", owner, kSlotNames[i], piece.lastServerDamage, server,
+                                     piece.baseDamage + static_cast<int>(std::lround(piece.wear)), piece.wear);
+                    }
                     piece.baseDamage = server;
                     piece.wear = 0.f;
                 }
@@ -354,6 +399,7 @@ namespace ArmorEstimate {
                 if (glint) ++enchantedPieces;
             }
 
+            if (jumpPending) return; // See above: not counting anything while the health reading is in doubt.
             const float previous = lastHealth;
             lastHealth = totalHealth;
             const float drop = previous - totalHealth;
@@ -421,6 +467,12 @@ namespace ArmorEstimate {
                 const float kept = assume.unbreaking && piece.glint ? 0.7f : 1.f;
                 piece.wear += static_cast<float>(perPiece) * kept * assume.wearScale;
             }
+            if (assume.debug) {
+                Logger::Info("[ArmorEstimate] player {}: counted {} hit: health+golden hearts {:.1f} -> {:.1f} (drop {:.2f}), "
+                             "damage {:.1f}, {} per piece; wear now H {:.1f} C {:.1f} L {:.1f} B {:.1f}",
+                             owner, ownHit ? "your" : "other", previous, totalHealth, drop, raw, perPiece, pieces[0].wear,
+                             pieces[1].wear, pieces[2].wear, pieces[3].wear);
+            }
         }
 
         // Durability points lost on a slot according to the guess, -1 if nothing is equipped there.
@@ -443,6 +495,7 @@ namespace ArmorEstimate {
         Piece pieces[4];
         float lastHealth = -1.f; // Health + golden hearts at the last update.
         float lastLife = -1.f;   // Health alone at the last update, for spotting a death or a respawn.
+        int jumpTicks = 0;       // How many updates in a row the health read has been 10 or more above lastLife.
     };
     // The four armor stacks of a player (null = empty slot or nothing that wears out).
     inline void readArmorStacks(SDK::Actor* actor, SDK::ItemStack* (&out)[4]) {
@@ -483,7 +536,14 @@ namespace ArmorEstimate {
                 const uint64_t id = actor->getRuntimeID();
                 auto& entry = entries[id];
                 entry.seen = counter;
-                if (std::find(syncs.begin(), syncs.end(), id) != syncs.end()) entry.tracker.resync();
+                entry.tracker.owner = id;
+                if (std::find(syncs.begin(), syncs.end(), id) != syncs.end()) {
+                    if (assume.debug) {
+                        Logger::Info("[ArmorEstimate] player {}: the server sent their whole armor again: wear wiped, "
+                                     "starting from the server's numbers", id);
+                    }
+                    entry.tracker.resync();
+                }
 
                 const auto vitals = readVitals(actor);
                 const float total = vitals.health < 0.f ? -1.f : vitals.health + vitals.absorption;

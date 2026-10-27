@@ -174,6 +174,8 @@ ArmorNametag::ArmorNametag()
     addSliderSetting("wearScale", LocalizeString::get("client.module.armorNametag.wearScale.name"),
                      LocalizeString::get("client.module.armorNametag.wearScale.desc"), wearScale, FloatValue(0.5f),
                      FloatValue(3.f), FloatValue(0.05f));
+    addSetting("debugLog", LocalizeString::get("client.module.armorNametag.debugLog.name"),
+               LocalizeString::get("client.module.armorNametag.debugLog.desc"), debugLog);
 
     listen<UpdateEvent>((EventListenerFunc)&ArmorNametag::onUpdate);
     listen<PacketReceiveEvent>((EventListenerFunc)&ArmorNametag::onPacketReceive);
@@ -226,6 +228,7 @@ void ArmorNametag::onUpdate(Event&) {
     const float otherHitDamage = getFloatOrDefault(weaponDamage, 7.f) + (assume.sharpness ? 3.f : 0.f) +
                                  3.f * static_cast<float>(assume.strength);
     assume.wearScale = getFloatOrDefault(wearScale, 1.f);
+    assume.debug = std::get<BoolValue>(debugLog);
 
     // Follow every player's armor, also the ones out of range of the nametag line.
     if (estimating) trackers.tick(level, localPlayer, assume, otherHitDamage);

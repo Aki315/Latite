@@ -945,6 +945,8 @@ TargetHUD::TargetHUD()
     addSliderSetting("wearScale", LocalizeString::get("client.hudmodule.targetHud.wearScale.name"),
                      LocalizeString::get("client.hudmodule.targetHud.wearScale.desc"), wearScale, FloatValue(0.5f),
                      FloatValue(3.f), FloatValue(0.05f), "estimateArmor"_istrue);
+    addSetting("debugLog", LocalizeString::get("client.hudmodule.targetHud.debugLog.name"),
+               LocalizeString::get("client.hudmodule.targetHud.debugLog.desc"), debugLog, "estimateArmor"_istrue);
     assumeStrength.addEntry(EnumEntry(StrengthNone, LocalizeString::get("client.hudmodule.targetHud.assumeStrength.none.name"),
                                       LocalizeString::get("client.hudmodule.targetHud.assumeStrength.none.desc")));
     assumeStrength.addEntry(EnumEntry(StrengthI, LocalizeString::get("client.hudmodule.targetHud.assumeStrength.one.name"),
@@ -1007,6 +1009,7 @@ void TargetHUD::onUpdate(Event&) {
     assume.unbreaking = std::get<BoolValue>(assumeUnbreaking);
     assume.strength = assumeStrength.getSelectedKey(); // None, I or II: the key is the level.
     assume.wearScale = std::get<FloatValue>(wearScale).value;
+    assume.debug = std::get<BoolValue>(debugLog);
     armorTrackers.tick(level, me, assume, std::get<FloatValue>(otherHitDamage).value);
 }
 

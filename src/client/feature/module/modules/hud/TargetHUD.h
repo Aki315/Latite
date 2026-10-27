@@ -68,6 +68,7 @@ private:
     ValueType assumeUnbreaking = BoolValue(true);  // Their armor has Unbreaking III.
     ValueType otherHitDamage = FloatValue(10.f);   // Damage of a hit you did not throw (10 = diamond sword + Sharpness V), 0 = ignore.
     ValueType wearScale = FloatValue(1.f);         // Multiplies the wear of every hit.
+    ValueType debugLog = BoolValue(false);         // Log every counted hit and every time a guess starts over, and why.
     static constexpr int StrengthNone = 0;
     static constexpr int StrengthI = 1;
     static constexpr int StrengthII = 2;

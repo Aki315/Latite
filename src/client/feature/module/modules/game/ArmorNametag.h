@@ -57,6 +57,7 @@ private:
     ValueType assumeProtection = BoolValue(true);  // Their armor is Protection IV.
     ValueType assumeUnbreaking = BoolValue(true);  // Their armor is Unbreaking III: about 30% less wear.
     ValueType wearScale = FloatValue(1.f);         // Multiplies the wear of every hit.
+    ValueType debugLog = BoolValue(false);         // Log every counted hit and every time a guess starts over, and why.
 
     // Estimated mode only: one guess per player, followed every tick (also for players out of nametag range).
     ArmorEstimate::Trackers trackers;
