@@ -6,7 +6,6 @@
 #include "mc/common/network/Packet.h"
 #include "util/Util.h"
 
-#include <cmath>
 #include <cstring>
 #include <format>
 
@@ -14,19 +13,10 @@ namespace {
     // StartGamePacket: protocol packet id 11 (0x0B).
     constexpr auto kStartGamePacketId = static_cast<SDK::PacketID>(0x0B);
 
-    // The packet's memory begins with the Packet base class (0x30 bytes). The StartGame fields that follow, in the
-    // order the protocol sends them: entity unique id (8), entity runtime id (8), game mode (4), position (3 floats),
-    // rotation (2 floats), then the level settings, which start with the seed (8).
-    //
-    // This layout is NOT verified in a running game, so nothing here trusts a fixed offset: it looks for the place in
-    // the packet where those fields line up (ids that are small, a game mode of 0 to 6, a position and rotation that
-    // are sane numbers), and reads the seed from 0x28 bytes after it. If nothing lines up it reports that instead of
-    // a made-up number.
-    constexpr size_t kScanStart = 0x30;
-    constexpr size_t kScanEnd = 0x1C0;
-    constexpr size_t kSeedAfterIds = 0x28;
-
-    bool sane(float v, float limit) { return std::isfinite(v) && std::fabs(v) <= limit; }
+    // The packet's memory begins with the Packet base class (0x30 bytes), and the level settings follow, starting with
+    // the seed (8 bytes). Checked in a running game: the seed sits at 0x30 (a .seed dump showed the server's seed
+    // there, as a little-endian 64-bit number).
+    constexpr size_t kSeedOffset = 0x30;
 
     // Copies bytes out of the packet. An access violation returns false instead of crashing. No objects with
     // destructors in here, which __try requires.
@@ -40,28 +30,10 @@ namespace {
     }
 
     bool findSeed(const uint8_t* bytes, size_t size, int64_t& seed, size_t& at) {
-        for (size_t o = kScanStart; o + kSeedAfterIds + 8 <= size && o <= kScanEnd; o += 8) {
-            uint64_t uniqueId, runtimeId;
-            int32_t mode;
-            float f[5];
-            std::memcpy(&uniqueId, bytes + o, 8);
-            std::memcpy(&runtimeId, bytes + o + 8, 8);
-            std::memcpy(&mode, bytes + o + 0x10, 4);
-            std::memcpy(f, bytes + o + 0x14, 20);
-
-            if (uniqueId == 0 || runtimeId == 0) continue;
-            if (uniqueId > (1ull << 48) && uniqueId < (0ull - (1ull << 48))) continue; // Not a plausible id (signed).
-            if (runtimeId > (1ull << 48)) continue;
-            if (mode < 0 || mode > 6) continue;
-            if (!sane(f[0], 3.0e7f) || !sane(f[1], 4096.f) || !sane(f[2], 3.0e7f)) continue;
-            if (!sane(f[3], 360.f) || !sane(f[4], 360.f)) continue;
-            if (f[0] == 0.f && f[1] == 0.f && f[2] == 0.f) continue;
-
-            std::memcpy(&seed, bytes + o + kSeedAfterIds, 8);
-            at = o + kSeedAfterIds;
-            return true;
-        }
-        return false;
+        if (size < kSeedOffset + 8) return false;
+        std::memcpy(&seed, bytes + kSeedOffset, 8);
+        at = kSeedOffset;
+        return true;
     }
 } // namespace
 
