@@ -15,6 +15,7 @@
 #include "commands/ConfigCommand.h"
 #include "commands/SignCommand.h"
 #include "commands/SeedCommand.h"
+#include "commands/PlayerInfoCommand.h"
 //
 
 CommandManager::CommandManager() {
@@ -28,6 +29,7 @@ CommandManager::CommandManager() {
     this->items.push_back(std::make_shared<SetPrefixCommand>());
     this->items.push_back(std::make_shared<ConfigCommand>());
     this->items.push_back(std::make_shared<SeedCommand>());
+    this->items.push_back(std::make_shared<PlayerInfoCommand>());
 #if LATITE_DEBUG
     this->items.push_back(std::make_shared<SignCommand>());
 #endif
