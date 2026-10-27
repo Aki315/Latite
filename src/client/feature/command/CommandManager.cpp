@@ -16,6 +16,7 @@
 #include "commands/SignCommand.h"
 #include "commands/SeedCommand.h"
 #include "commands/PlayerInfoCommand.h"
+#include "commands/NbtCommand.h"
 //
 
 CommandManager::CommandManager() {
@@ -30,6 +31,7 @@ CommandManager::CommandManager() {
     this->items.push_back(std::make_shared<ConfigCommand>());
     this->items.push_back(std::make_shared<SeedCommand>());
     this->items.push_back(std::make_shared<PlayerInfoCommand>());
+    this->items.push_back(std::make_shared<NbtCommand>());
 #if LATITE_DEBUG
     this->items.push_back(std::make_shared<SignCommand>());
 #endif
