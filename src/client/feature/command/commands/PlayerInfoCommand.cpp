@@ -51,7 +51,7 @@ namespace {
 
 PlayerInfoCommand::PlayerInfoCommand()
     : Command("playerinfo", L"Lists the players with their platform, host flag, actor unique id and skin id",
-              "[name|dump]", { "pinfo" }) {}
+              "[name|dump|flags]", { "pinfo" }) {}
 
 bool PlayerInfoCommand::execute(std::string const label, std::vector<std::string> args) {
     auto* ci = SDK::ClientInstance::get();
@@ -72,6 +72,17 @@ bool PlayerInfoCommand::execute(std::string const label, std::vector<std::string
         }
         const std::string firstName = first.name;
         message(std::format("Wrote the first player's entry ({}) to the log.", firstName));
+        return true;
+    }
+
+    if (!args.empty() && util::ToLower(args[0]) == "flags") {
+        for (auto& [uuid, entry] : *players) {
+            const std::string name = entry.name;
+            const auto* bytes = reinterpret_cast<const uint8_t*>(&entry);
+            std::string line = std::format("&a{}&r:", name);
+            for (size_t i = 0xA0; i < 0xA8; ++i) line += std::format(" {:02X}", bytes[i]);
+            print(line);
+        }
         return true;
     }
 
