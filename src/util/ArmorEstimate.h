@@ -32,6 +32,9 @@
 //    never scaled up.
 //  - Swapping to an identical fresh piece with no gap, no packet and no enchant change can't be told apart from the
 //    same piece; the next durability number the server sends corrects it.
+//  - Golden hearts: a drop of only golden hearts (their health did not change) is not counted as a hit unless you just
+//    swung at them, since golden hearts also vanish when the golden apple's effect runs out. So a hit that was
+//    completely soaked up by golden hearts is not counted for hits you didn't throw.
 //  - A hit is only recognised from a health drop: 0.05 or more right after you swung, 0.3 or more for hits you didn't
 //    throw. A hit that takes no health at all (a block, a swing the server cancelled) isn't counted.
 //  - The damage numbers follow Blurry's Java PvP addon (item damage, crit x1.5, Sharpness 0.5 x level + 0.5, Strength
@@ -297,9 +300,11 @@ namespace ArmorEstimate {
         // ownHit: you swung at them just now, so `weapon` is what hit. Otherwise a drop is counted only if
         // `otherHitDamage` is above 0 (an assumed damage for hits you can't see).
         //
-        // health: their health without golden hearts, or < 0 if unknown. Used to notice a death or a respawn.
+        // health: their health without golden hearts, or < 0 if unknown. Used to notice a death or a respawn, and to
+        // tell a hit from golden hearts running out (see below). absorption: their golden hearts, for the log only.
         void update(SDK::ItemStack* const* armor, float totalHealth, bool ownHit, Weapon const& weapon,
-                    float otherHitDamage, Assumptions const& assume, float health = -1.f) {
+                    float otherHitDamage, Assumptions const& assume, float health = -1.f, float absorption = 0.f) {
+            const float previousLife = lastLife; // Their health at the last update (before it is overwritten below).
             // Dead (health 0) or alive again (a jump of 10 or more, which healing can't do but a respawn does): the
             // wear belongs to the last life, so start over from what the server says now.
             if (health >= 0.f) {
@@ -358,6 +363,18 @@ namespace ArmorEstimate {
             // be a drop of only a tenth of a heart or so. Hits you didn't throw need a clearer drop to be told apart
             // from anything else (poison, fire, hunger).
             if (drop < (ownHit ? 0.05f : 0.3f)) return;
+
+            // Golden hearts go down without anyone hitting the player: when the effect from a golden apple runs out the
+            // hearts just disappear, which looked like a hit and wore the armor (and eating one next to a drop that
+            // happens to line up does the same). So a drop you did not throw only counts when their real health went
+            // down too. A hit that the golden hearts soaked up completely is missed on purpose: no wear is better than
+            // wear that was never there. Your own swings still count either way.
+            if (!ownHit && previousLife >= 0.f && health >= 0.f && previousLife - health < 0.05f) {
+                Logger::Info("[ArmorEstimate] ignored a drop of {:.1f} on a player: health {:.1f} -> {:.1f} did not change, "
+                             "only golden hearts went down (now {:.1f}); not a hit",
+                             drop, previousLife, health, absorption);
+                return;
+            }
 
             // How much of a hit gets through their armor: armor points, then Protection (IV on every enchanted piece).
             const float protection = assume.protection ? 1.f - std::min(20.f, 4.f * enchantedPieces) * 0.04f : 1.f;
@@ -476,7 +493,7 @@ namespace ArmorEstimate {
                 SDK::ItemStack* stacks[4];
                 readArmorStacks(actor, stacks);
                 entry.tracker.update(stacks, total, own, own ? swing->second.weapon : Weapon {}, otherHitDamage, assume,
-                                     vitals.health);
+                                     vitals.health, vitals.absorption);
             }
 
             // Drop players that have been gone for about two minutes.
