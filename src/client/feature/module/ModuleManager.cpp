@@ -73,7 +73,7 @@ ModuleManager::ModuleManager() {
     this->items.push_back(std::make_shared<Gyro>());
     this->items.push_back(std::make_shared<Fullbright>());
     this->items.push_back(std::make_shared<MotionBlur>());
-    // this->items.push_back(std::make_shared<HurtColor>());
+    this->items.push_back(std::make_shared<HurtColor>());
     this->items.push_back(std::make_shared<FPSCounter>());
     this->items.push_back(std::make_shared<CPSCounter>());
     this->items.push_back(std::make_shared<ServerDisplay>());
