@@ -32,7 +32,7 @@ using SlotLosses = std::array<int, kSlotCount>;
 // Durability Source:
 //  - Actual:    shows the last durability the server synced to this client.
 //  - Estimated: works like the Target HUD (see util/ArmorEstimate.h). It watches every player's health, and when it
-//               drops after you swung at them, it uses your weapon, Sharpness V and Strength to work out the wear.
+//               drops after you swung at them, it uses your weapon, its Sharpness level (read from the item) and your Strength to work out the wear.
 //               Hits you didn't throw use the assumed Weapon Damage settings. Estimates are marked with "~", and
 //               reset when the server sends the player's armor again.
 class ArmorNametag final : public Module {
@@ -52,7 +52,7 @@ private:
 
     // What a hit you did NOT throw is assumed to be (Estimated mode only), and what their armor is assumed to have.
     ValueType weaponDamage = FloatValue(7.f);      // Base damage of the weapon: 7 = diamond sword, 8 = netherite.
-    ValueType assumeSharpness = BoolValue(true);   // Sharpness V: +3 damage.
+    ValueType assumeSharpness = BoolValue(true);   // Fallback: Sharpness V (+3 damage) when your weapon's level can't be read from the item.
     ValueType strengthLevel = FloatValue(0.f);     // Strength potion level, +3 damage per level (also for your hits).
     ValueType assumeProtection = BoolValue(true);  // Their armor is Protection IV.
     ValueType assumeUnbreaking = BoolValue(true);  // Their armor is Unbreaking III: about 30% less wear.

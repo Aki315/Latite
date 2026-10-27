@@ -12,11 +12,12 @@
 // The client sees the same thing as your height dropping from one tick to the next, so no setting is needed.
 //
 // What it reads about YOUR swing on its own: the item in your hand (swords, axes, trident, pickaxes, shovels, hoes and
-// the mace; anything else is worked out from how much health it took), whether that item is enchanted (it glows),
-// and your own Strength and Weakness potions. For THEIR armor it checks which pieces are enchanted the same way.
-// The client can't read the enchantment levels themselves, so an enchanted sword is taken as Sharpness V and enchanted
-// armor as Protection IV, as far as the Assume settings allow. Unbreaking is only counted on pieces that glow, since
-// a plain piece can't have it.
+// the mace; anything else is worked out from how much health it took), the Sharpness level of that item read from its
+// enchantment data (util/EnchantNbt.h), and your own Strength and Weakness potions. If the enchantment data can't be
+// read (the layout of the game's tag is not verified, so this can fail on some game versions), an enchanted (glowing)
+// sword is taken as Sharpness V as far as the Assume Sharpness setting allows, like before.
+// For THEIR armor it checks which pieces are enchanted (they glow); the levels of THEIR armor are not read, so enchanted
+// armor is taken as Protection IV, and Unbreaking is only counted on pieces that glow, since a plain piece can't have it.
 //
 // When the estimate starts over (so it never shows a stale number): the target dies (health reaches 0) or comes back
 // to life (health jumps up by 10 or more), a piece disappears from its slot, a different item or enchanted state
@@ -24,7 +25,8 @@
 // whole armor again (see syncArmorPacket), and the owner of the tracker calls reset() on a new target.
 //
 // Limits, since the client can't see everything:
-//  - Enchantment LEVELS are not readable (the tag data isn't exposed), only "enchanted or not", so levels are assumed.
+//  - The enchantment levels of THEIR armor are not read, only "enchanted or not", so Protection IV and Unbreaking III
+//    are assumed. Your own weapon's Sharpness level is read when the item's enchantment data can be understood.
 //  - Other players' potions (Resistance, Weakness on them) and their shield blocks are not visible. A block or a weaker
 //    hit than expected shows up as a smaller health drop and scales the wear down, but a hit harder than expected is
 //    never scaled up.
@@ -40,6 +42,8 @@
 //  - The result is an estimate, and the displays mark it with ~.
 
 #include "mc/Addresses.h"
+#include "util/EnchantNbt.h"
+#include "util/Logger.h"
 #include "mc/common/entity/component/AttributesComponent.h"
 #include "mc/common/entity/IEntityComponent.h"
 #include "mc/common/entity/component/MobEffectsComponent.h"
@@ -59,6 +63,7 @@
 #include <vector>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <string>
 
 namespace ArmorEstimate {
@@ -163,7 +168,8 @@ namespace ArmorEstimate {
         float base = -1.f; // -1 = unknown weapon
         bool sharpable = false;
         bool crit = false; // The swing was a critical hit: you were falling.
-        bool enchanted = false; // The item in your hand glows, so it has enchantments (taken as Sharpness V).
+        bool enchanted = false; // The item in your hand glows, so it has enchantments.
+        int sharpness = -1;     // Sharpness level read from the item (0 = it has none), -1 = could not be read.
         int strength = 0;       // Your own Strength level when you swung (0 = none).
         int weakness = 0;       // Your own Weakness level when you swung (0 = none).
     };
@@ -213,6 +219,37 @@ namespace ArmorEstimate {
         }
     }
 
+    // Reads game memory without crashing: false instead of an access violation when the address is not mapped. No objects
+    // with destructors in here, which __try requires.
+    inline bool readGameMemory(const void* from, void* to, size_t bytes) {
+        __try {
+            std::memcpy(to, from, bytes);
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
+    // What the weapon in your hand has, logged once each time it changes so a wrong reading is easy to spot in the log.
+    inline void logWeaponRead(std::string const& item, EnchantNbt::Enchants const& enchants) {
+        static std::string last;
+        std::string now = item + (enchants.status == EnchantNbt::Status::Parsed
+                                      ? " sharpness " + std::to_string(enchants.levelOf(EnchantNbt::kSharpness))
+                                      : " unreadable");
+        if (now == last) return;
+        last = std::move(now);
+        if (enchants.status == EnchantNbt::Status::Parsed) {
+            std::string all;
+            for (auto const& e : enchants.list) all += " [" + std::to_string(e.first) + ":" + std::to_string(e.second) + "]";
+            Logger::Info("[ArmorEstimate] your {}: Sharpness {} read from the item (enchantments {})", item,
+                         enchants.levelOf(EnchantNbt::kSharpness), all.empty() ? " none" : all);
+        } else {
+            Logger::Info("[ArmorEstimate] your {} glows but its enchantments could not be read: assuming Sharpness V "
+                         "(if Assume Sharpness is on)",
+                         item);
+        }
+    }
+
     // What you are swinging, as a weapon: the item in your hand (a bare hand does 1), whether it is enchanted, whether
     // the swing is a crit, and your own potions. Call it when you hit.
     inline Weapon heldWeapon(SDK::Player* me) {
@@ -226,6 +263,13 @@ namespace ArmorEstimate {
             if (item) {
                 weapon.base = weaponBase(item->namespacedId.getString(), weapon.sharpable);
                 weapon.enchanted = item->isGlint(held);
+                if (weapon.enchanted && weapon.sharpable) {
+                    const auto enchants = EnchantNbt::readEnchants(held->tag.get(), readGameMemory);
+                    if (enchants.status == EnchantNbt::Status::Parsed) {
+                        weapon.sharpness = enchants.levelOf(EnchantNbt::kSharpness);
+                    }
+                    logWeaponRead(shortName(item->namespacedId.getString()), enchants);
+                }
             }
         }
         return weapon;
@@ -325,11 +369,16 @@ namespace ArmorEstimate {
 
             float raw;
             if (ownHit && weapon.base >= 0.f) {
-                // We know the weapon: its damage (x1.5 on a crit), Sharpness V = +3 on an enchanted sword or axe,
-                // Strength = +3 per level (your potion, or the extra level from the settings), Weakness = -4 per level.
+                // We know the weapon: its damage (x1.5 on a crit), Sharpness on a sword or axe (the level read from the
+                // item, or V = +3 when an enchanted one can't be read), Strength = +3 per level (your potion, or the
+                // extra level from the settings), Weakness = -4 per level.
                 const int strength = std::max(weapon.strength, assume.strength);
-                raw = (weapon.crit ? weapon.base * 1.5f : weapon.base) +
-                      (weapon.sharpable && weapon.enchanted && assume.sharpness ? 3.f : 0.f) +
+                float sharpness = 0.f;
+                if (weapon.sharpable && weapon.enchanted) {
+                    if (weapon.sharpness >= 0) sharpness = EnchantNbt::sharpnessBonus(weapon.sharpness);
+                    else if (assume.sharpness) sharpness = 3.f;
+                }
+                raw = (weapon.crit ? weapon.base * 1.5f : weapon.base) + sharpness +
                       3.f * static_cast<float>(strength) - 4.f * static_cast<float>(weapon.weakness);
                 raw = std::max(raw, 1.f);
             } else if (!ownHit) {

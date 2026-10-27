@@ -64,7 +64,7 @@ private:
     ValueType showArmorDurability = BoolValue(true);
     ValueType estimateArmor = BoolValue(true);
     ValueType assumeProtection = BoolValue(true);  // They wear Protection IV (4 on each piece).
-    ValueType assumeSharpness = BoolValue(true);   // Your sword or axe has Sharpness V.
+    ValueType assumeSharpness = BoolValue(true);   // Fallback: Sharpness V when the level of your sword or axe can't be read from the item.
     ValueType assumeUnbreaking = BoolValue(true);  // Their armor has Unbreaking III.
     ValueType otherHitDamage = FloatValue(10.f);   // Damage of a hit you did not throw (10 = diamond sword + Sharpness V), 0 = ignore.
     ValueType wearScale = FloatValue(1.f);         // Multiplies the wear of every hit.
