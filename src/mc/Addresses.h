@@ -32,7 +32,7 @@ public:
             [](memory::signature_store&, uintptr_t res) {
                 return res;
             },
-            "74 ? 48 8B 03 48 8B 80 ? ? ? ? 48 89 D9 FF 15 ? ? ? ? 84 C0 75 ? 48 8B 4B"_sig, "ThirdPersonNametag"
+            "74 ? 48 8B 03 48 8B 80 ? ? ? ? 48 89 D9 FF 15 ? ? ? ? 84 C0 75 ? 48 8B ?"_sig, "ThirdPersonNametag"
         };
     };
 
@@ -60,7 +60,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "55 41 57 41 56 41 55 41 54 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 48 C7 85 ? ? ? ? ? ? ? ? 89 D6 4C 8B 3D"_sig,
+        "55 41 57 41 56 41 55 41 54 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 48 C7 85 ? ? ? ? ? ? ? ? 89 D6 ? ? ?"_sig,
         "MainWindow::_windowProcCallback"
     };
 
@@ -98,7 +98,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "56 48 83 EC ? 48 89 CE 48 8B 01 48 8B 80 ? ? ? ? FF 15 ? ? ? ? 84 C0 74 ? 48 8B 8E ? ? ? ? 48 8B 01 48 8B 80 ? ? ? ? 48 8B 15 ? ? ? ? 48 83 C4 ? 5E 48 FF E2 90 48 83 C4 ? 5E C3 CC CC CC CC CC CC CC CC CC CC CC CC CC 56 48 83 EC"_sig,
+        "56 48 83 EC ? 48 89 CE 48 8B 01 48 8B 80 ? ? ? ? FF 15 ? ? ? ? 84 C0 74 ? 48 8B 8E ? ? ? ? 48 8B 01 48 8B 80 ? ? ? ? 48 8B 15 ? ? ? ? 48 83 C4 ? 5E 48 FF E2 ? ? ? ? ? ? ? CC CC CC CC CC CC CC CC CC CC CC CC CC 56 48 83 EC"_sig,
         "ClientInstance::grabCursor"
     };
 
@@ -106,7 +106,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "56 48 83 EC ? 48 89 CE 48 8B 01 48 8B 80 ? ? ? ? FF 15 ? ? ? ? 84 C0 74 ? 48 8B 8E ? ? ? ? 48 8B 01 48 8B 80 ? ? ? ? 48 8B 15 ? ? ? ? 48 83 C4 ? 5E 48 FF E2 90 48 83 C4 ? 5E C3 CC CC CC CC CC CC CC CC CC CC CC CC CC 56 53"_sig,
+        "56 48 83 EC ? 48 89 CE 48 8B 01 48 8B 80 ? ? ? ? FF 15 ? ? ? ? 84 C0 74 ? 48 8B 8E ? ? ? ? 48 8B 01 48 8B 80 ? ? ? ? 48 8B 15 ? ? ? ? 48 83 C4 ? 5E 48 FF E2 ? ? ? ? ? ? ? CC CC CC CC CC CC CC CC CC CC CC CC CC 56 53"_sig,
         "ClientInstance::releaseCursor"
     };
 
@@ -114,7 +114,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "55 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 44 0F 29 6D ? 44 0F 29 65 ? 44 0F 29 5D ? 44 0F 29 55 ? 66 44 0F 7F 4D"_sig,
+        "55 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 44 0F 29 6D ? 44 0F 29 65 ? 44 0F 29 5D ? 44 0F 29 55 ? ? ? ? ? ?"_sig,
         "MultiPlayerLevel::_subTick"
     };
 
@@ -138,7 +138,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "55 41 57 41 56 41 55 41 54 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 44 0F 29 BD ? ? ? ? 44 0F 29 B5 ? ? ? ? 44 0F 29 AD ? ? ? ? 44 0F 29 A5 ? ? ? ? 44 0F 29 9D ? ? ? ? 44 0F 29 95 ? ? ? ? 44 0F 29 8D ? ? ? ? 44 0F 29 85 ? ? ? ? 0F 29 BD ? ? ? ? 0F 29 B5 ? ? ? ? 48 C7 85 ? ? ? ? ? ? ? ? 48 89 CE 8B 05"_sig,
+        "55 41 57 41 56 41 55 41 54 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 44 0F 29 BD ? ? ? ? 44 0F 29 B5 ? ? ? ? 44 0F 29 AD ? ? ? ? 44 0F 29 A5 ? ? ? ? 44 0F 29 9D ? ? ? ? 44 0F 29 95 ? ? ? ? 44 0F 29 8D ? ? ? ? 44 0F 29 85 ? ? ? ? 0F 29 BD ? ? ? ? 0F 29 B5 ? ? ? ? 48 C7 85 ? ? ? ? ? ? ? ? 48 89 ? ? 05"_sig,
         "GameCore::handleMouseInput"
     };
 
@@ -190,7 +190,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "55 41 56 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 44 0F 29 5D ? 44 0F 29 55 ? 44 0F 29 4D ? 44 0F 29 45 ? 0F 29 7D ? 0F 29 75 ? 48 C7 45 ? ? ? ? ? 48 89 D7 48 89 CE 48 8B 89"_sig,
+        "55 41 56 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 44 0F 29 5D ? 44 0F 29 55 ? 44 0F 29 4D ? 44 0F 29 45 ? 0F 29 7D ? 0F 29 75 ? 48 C7 45 ? ? ? ? ? ? 89 ? 48 89 ? ? ? ?"_sig,
         "LocalPlayer::applyTurnDelta"
     };
 
@@ -199,7 +199,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "41 57 41 56 41 55 41 54 56 57 55 53 48 81 EC ? ? ? ? 48 8B 84 24"_sig,
+        "41 57 41 56 41 55 41 54 56 57 55 53 48 81 EC ? ? ? ? 48 8B ? 24"_sig,
         "ClientInputUpdateSystemInternal::tickUpdateClientInput"
     };
 
@@ -219,7 +219,7 @@ public:
     inline static SigImpl ItemStackVtable { [](memory::signature_store& store, uintptr_t) {
                                                return store.deref(3);
                                            },
-                                            "48 8D 1D ? ? ? ? 48 89 5D ? 48 8D 4D ? 48 89 F2"_sig, "ItemStackVtable" };
+                                            "48 8D 1D ? ? ? ? 48 89 5D ? 48 8D 4D ? 48 89 ?"_sig, "ItemStackVtable" };
 
     inline static SigImpl ItemStackBase_destructor {
         [](memory::signature_store&, uintptr_t res) {
@@ -233,7 +233,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "55 41 57 41 56 41 55 41 54 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 44 0F 29 4D ? 44 0F 29 45 ? 0F 29 7D ? 0F 29 75 ? 48 C7 45 ? ? ? ? ? 0F 28 F3 0F 28 FA 44 0F 28 C1 48 89 CE 48 8B 0D"_sig,
+        "55 41 57 41 56 41 55 41 54 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 44 0F 29 4D ? 44 0F 29 45 ? 0F 29 7D ? 0F 29 75 ? 48 C7 45 ? ? ? ? ? 0F 28 F3 0F 28 FA 44 0F 28 C1 48 89 CE 48 ? ?"_sig,
         "Tessellator::vertex"
     };
 
@@ -344,7 +344,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "55 41 57 41 56 41 55 41 54 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 0F 29 B5 ? ? ? ? 48 C7 85 ? ? ? ? ? ? ? ? 4D 89 CF 4D 89 C6 48 89 D6 48 89 CF 41 8B 80"_sig,
+        "55 41 57 41 56 41 55 41 54 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 0F 29 B5 ? ? ? ? 48 C7 85 ? ? ? ? ? ? ? ? 4D 89 ? 4D 89 C6 48 89 D6 48 89 CF 41 8B 80"_sig,
         "Actor::attack"
     };
 
@@ -367,7 +367,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "49 89 D0 48 8B 51 ? 48 3B 51 ? 0F 84 ? ? ? ? 41 8B 00 89 02 0F 57 C0 0F 11 42 ? 0F 11 42 ? 41 0F 10 48 ? 41 0F 10 50 ? 0F 11 52 ? 0F 11 4A ? 49 C7 40 ? ? ? ? ? 49 C7 40 ? ? ? ? ? 41 C6 40 ? ? C6 42"_sig,
+        "49 89 D0 48 8B 51 ? 48 3B 51 ? 0F 84 ? ? ? ? 41 8B 00 89 02 0F 57 C0 0F 11 42 ? 0F 11 42 ? 41 0F 10 48 ? 41 0F 10 50 ? 0F 11 52 ? 0F 11 4A ? 49 C7 40 ? ? ? ? ? 49 C7 40 ? ? ? ? ? 41 C6 40 ? ? ? ?"_sig,
         "std::vector<GuiMessage>::emplace_back"
     };
 
