@@ -639,6 +639,8 @@
         "client.module.cobwebOutline.outlineColor.desc": "The color of the outline.",
         "client.module.cobwebOutline.thickness.name": "Thickness",
         "client.module.cobwebOutline.thickness.desc": "How wide the frame is, in blocks. 0.0625 is 1/16 of a block, which is the Java pack's width. Only for the Java Frame style.",
+        "client.module.cobwebOutline.maxOutlines.name": "Max Outlines",
+        "client.module.cobwebOutline.maxOutlines.desc": "Only the nearest this many cobwebs get an outline. Lower it if you lose FPS when there are a lot of cobwebs.",
         "client.module.cobwebOutline.range.name": "Range",
         "client.module.cobwebOutline.range.desc": "How many blocks around you are searched for cobwebs. Higher values cost more performance.",
         "client.module.shieldIndicator.name": "Shield Indicator",
