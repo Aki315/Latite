@@ -18,10 +18,10 @@ namespace rtti {
             const bool named = className(p, name, sizeof(name));
             const auto firstValue = reinterpret_cast<uintptr_t>(first);
             if (inImage(firstValue)) {
-                Logger::Info("[Offsets]   {}+0x{:X}: ptr -> vtable exe+0x{:X} {}", label, off,
-                             firstValue - imageBase(), named ? name : "");
+                Logger::Info("[Offsets]   {}+0x{:X}: 0x{:X} -> vtable exe+0x{:X} {}", label, off,
+                             reinterpret_cast<uintptr_t>(p), firstValue - imageBase(), named ? name : "");
             } else if (named) {
-                Logger::Info("[Offsets]   {}+0x{:X}: {}", label, off, name);
+                Logger::Info("[Offsets]   {}+0x{:X}: 0x{:X} {}", label, off, reinterpret_cast<uintptr_t>(p), name);
             }
         }
     }

@@ -34,6 +34,8 @@ namespace DebugExceptionHandler {
     void RunVoidWithSehGuard(SehVoidCallback callback, void* context, char const* reason) noexcept;
     std::string GenerateStackTrace(CONTEXT* contextArg = nullptr);
     std::filesystem::path WriteCrashReport(EXCEPTION_POINTERS* exceptionInfo, std::string_view reason);
+    // Logs an access violation (once per faulting address) without a minidump and without ending the process.
+    void WriteSurvivedReport(EXCEPTION_POINTERS* exceptionInfo, std::string_view reason);
 }
 
 void LogExceptionDetails(const std::exception& e);

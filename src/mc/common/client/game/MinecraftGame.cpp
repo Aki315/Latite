@@ -13,18 +13,22 @@ namespace {
     static_assert(sizeof(ClientInterface) == 0x18);
 }
 
+namespace {
+    constexpr size_t kDefaultClientMapOffset = 0x970;
+    size_t clientMapOffset = kDefaultClientMapOffset; // where the client map really is, once found
+}
+
 bool SDK::MinecraftGame::calibrate(MinecraftGame* game) {
-    static bool found = false;
-    if (found) return true;
-    const size_t off = rtti::findPointerField(game, offGameRenderer, 0x400, "GameRenderer");
-    if (!off) return false;
-    if (off != offGameRenderer) {
-        Logger::Info("[Offsets] MinecraftGame.gameRenderer moved: +0x{:X} -> +0x{:X}", offGameRenderer, off);
-    } else {
-        Logger::Info("[Offsets] MinecraftGame.gameRenderer at +0x{:X}", off);
+    // No RTTI for GameRenderer. Everything after the client map moved with it, so assume the same shift.
+    static bool done = false;
+    if (done) return true;
+    done = true;
+    if (clientMapOffset != kDefaultClientMapOffset) {
+        const ptrdiff_t delta = static_cast<ptrdiff_t>(clientMapOffset) - static_cast<ptrdiff_t>(kDefaultClientMapOffset);
+        offGameRenderer += delta;
+        Logger::Info("[Offsets] MinecraftGame.gameRenderer assumed at +0x{:X} (same shift as the client map)",
+                     offGameRenderer);
     }
-    offGameRenderer = off;
-    found = true;
     return true;
 }
 
@@ -42,7 +46,6 @@ namespace {
     // The MinecraftGame layout shifts between game versions, so the client map isn't read from a hardcoded
     // offset blindly: candidates are validated (MSVC std::map node layout, key 0, a ClientInstance whose vtable
     // points into the game image) under SEH. No objects with destructors in these functions, which __try requires.
-    constexpr size_t kDefaultMapOffset = 0x970;
     constexpr size_t kScanStart = 0x600;
     constexpr size_t kScanEnd = 0x1400;
 
@@ -83,18 +86,19 @@ SDK::ClientInstance* SDK::MinecraftGame::getPrimaryClientInstance() {
         return static_cast<ClientInstance*>(readPrimaryFromMap(self + foundOffset));
     }
 
-    void* inst = readPrimaryFromMap(self + kDefaultMapOffset);
+    void* inst = readPrimaryFromMap(self + kDefaultClientMapOffset);
     if (inst) {
-        foundOffset = kDefaultMapOffset;
+        foundOffset = kDefaultClientMapOffset;
         return static_cast<ClientInstance*>(inst);
     }
 
     for (size_t off = kScanStart; off < kScanEnd; off += 8) {
-        if (off == kDefaultMapOffset) continue;
+        if (off == kDefaultClientMapOffset) continue;
         inst = readPrimaryFromMap(self + off);
         if (inst) {
             foundOffset = off;
-            Logger::Info("MinecraftGame client map found at +0x{:X} (expected +0x{:X})", off, kDefaultMapOffset);
+            clientMapOffset = off;
+            Logger::Info("MinecraftGame client map found at +0x{:X} (expected +0x{:X})", off, kDefaultClientMapOffset);
             return static_cast<ClientInstance*>(inst);
         }
     }

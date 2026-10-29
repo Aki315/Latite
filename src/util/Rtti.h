@@ -40,6 +40,15 @@ namespace rtti {
         }
     }
 
+    inline bool readBytes(const void* addr, void* out, size_t count) {
+        __try {
+            std::memcpy(out, addr, count);
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
     inline bool readByte(const void* addr, uint8_t* out) {
         __try {
             *out = *reinterpret_cast<const uint8_t*>(addr);
@@ -82,6 +91,7 @@ namespace rtti {
 
     // needle starting with '=' must equal the class name, otherwise it only has to be contained in it.
     inline bool nameMatches(const char* name, const char* needle) {
+        if (needle[0] == 0) return false;
         if (needle[0] == '=') return std::strcmp(name, needle + 1) == 0;
         return std::strstr(name, needle) != nullptr;
     }

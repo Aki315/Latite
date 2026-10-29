@@ -497,10 +497,27 @@ namespace {
         DebugExceptionHandler::AbortProcess();
     }
 
+    // Set by HandleSehException when the exception was only logged and the process should keep running.
+    __declspec(thread) bool g_lastSehSurvived = false;
+
     int HandleSehException(EXCEPTION_POINTERS* exceptionInfo, char const* reason) noexcept {
         if (exceptionInfo && exceptionInfo->ExceptionRecord &&
             exceptionInfo->ExceptionRecord->ExceptionCode == cppExceptionCode) {
             return EXCEPTION_CONTINUE_SEARCH;
+        }
+
+        g_lastSehSurvived = false;
+        // A wrong field offset after a game update shows up as an access violation. Log it once per address and
+        // keep going, so one run can show every broken spot instead of only the first.
+        if (exceptionInfo && exceptionInfo->ExceptionRecord &&
+            exceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
+            crashHandlerEntered.load() == 0) {
+            try {
+                DebugExceptionHandler::WriteSurvivedReport(
+                    exceptionInfo, reason ? reason : "Caught SEH exception at Latite native boundary");
+            } catch (...) {}
+            g_lastSehSurvived = true;
+            return EXCEPTION_EXECUTE_HANDLER;
         }
 
         try {
@@ -618,7 +635,7 @@ std::uintptr_t DebugExceptionHandler::RunWithSehGuard(SehCallback callback, void
             return callback(context);
         }
     } __except (HandleSehException(GetExceptionInformation(), reason)) {
-        AbortProcess();
+        if (!g_lastSehSurvived) AbortProcess();
     }
 
     return 0;
@@ -630,7 +647,7 @@ void DebugExceptionHandler::RunVoidWithSehGuard(SehVoidCallback callback, void* 
             callback(context);
         }
     } __except (HandleSehException(GetExceptionInformation(), reason)) {
-        AbortProcess();
+        if (!g_lastSehSurvived) AbortProcess();
     }
 }
 
@@ -760,6 +777,58 @@ std::filesystem::path DebugExceptionHandler::WriteCrashReport(EXCEPTION_POINTERS
     AppendRawLog(stackReport.str(), false);
 
     return dumpPath;
+}
+
+void DebugExceptionHandler::WriteSurvivedReport(EXCEPTION_POINTERS* exceptionInfo, std::string_view reason) {
+    static std::atomic<unsigned> reportCount { 0 };
+    static std::atomic<DWORD64> seenAddresses[64];
+
+    const DWORD64 address = (exceptionInfo && exceptionInfo->ExceptionRecord)
+                                ? reinterpret_cast<DWORD64>(exceptionInfo->ExceptionRecord->ExceptionAddress)
+                                : 0;
+    const unsigned known = reportCount.load();
+    for (unsigned i = 0; i < known && i < 64; i++) {
+        if (seenAddresses[i].load() == address) return;
+    }
+    const unsigned index = reportCount.fetch_add(1);
+    if (index >= 64) return;
+    seenAddresses[index].store(address);
+
+    CONTEXT context = {};
+    if (exceptionInfo && exceptionInfo->ContextRecord) {
+        context = *exceptionInfo->ContextRecord;
+    } else {
+        RtlCaptureContext(&context);
+    }
+
+    std::ostringstream report;
+    report << "\n";
+    report << MakeCenteredDivider("Latite Survived Exception (execution continues)", '-', crashReportWidth) << "\n";
+    report << "Time: " << MakeTimestamp(false) << "\n";
+    report << "Reason: " << reason << "\n";
+    report << "Thread ID: " << GetCurrentThreadId() << "\n";
+    if (exceptionInfo && exceptionInfo->ExceptionRecord) {
+        auto exceptionRecord = exceptionInfo->ExceptionRecord;
+        report << "Exception Code: 0x" << std::hex << std::uppercase << exceptionRecord->ExceptionCode << std::dec
+               << "\n";
+        report << "Exception Address: " << FormatAddress(reinterpret_cast<DWORD64>(exceptionRecord->ExceptionAddress))
+               << "\n";
+        if (exceptionRecord->NumberParameters >= 2) {
+            report << "Access: " << (exceptionRecord->ExceptionInformation[0] == 0 ? "read" : "write")
+                   << " of address 0x" << std::hex << std::uppercase << exceptionRecord->ExceptionInformation[1]
+                   << std::dec << "\n";
+        }
+    }
+    AppendRawLog(report.str());
+
+    std::ostringstream stackReport;
+    try {
+        stackReport << GenerateStackTrace(&context);
+    } catch (...) {
+        stackReport << "Stack trace unavailable.\n";
+    }
+    stackReport << "\n" << std::string(crashReportWidth, '-') << "\n";
+    AppendRawLog(stackReport.str(), false);
 }
 
 void LogUnknownExceptionDetails(std::string_view reason) {
