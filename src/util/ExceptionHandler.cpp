@@ -5,6 +5,7 @@
 #include "util/Util.h"
 
 #include <atomic>
+#include "util/Rtti.h"
 #include <cstdlib>
 #include <dbghelp.h>
 #include <iomanip>
@@ -499,6 +500,25 @@ namespace {
 
     // Set by HandleSehException when the exception was only logged and the process should keep running.
     __declspec(thread) bool g_lastSehSurvived = false;
+    // Number of Run*WithSehGuard calls active on this thread (they report their own exceptions).
+    __declspec(thread) int g_sehGuardDepth = 0;
+
+    bool IsReportableFirstChance(DWORD code) {
+        switch (code) {
+        case 0xC0000005: // access violation
+        case 0xC0000006: // in-page error
+        case 0xC000001D: // illegal instruction
+        case 0xC0000094: // integer divide by zero
+        case 0xC0000096: // privileged instruction
+        case 0xC00000FD: // stack overflow
+        case 0xC0000374: // heap corruption
+        case 0xC0000409: // fast fail (stack cookie, abort, invalid call target)
+        case 0xC0000025: // non-continuable
+            return true;
+        default:
+            return false;
+        }
+    }
 
     int HandleSehException(EXCEPTION_POINTERS* exceptionInfo, char const* reason) noexcept {
         if (exceptionInfo && exceptionInfo->ExceptionRecord &&
@@ -538,6 +558,20 @@ LONG WINAPI VectoredExceptionHandler(PEXCEPTION_POINTERS pExceptionInfo) {
         pExceptionInfo->ExceptionRecord->ExceptionCode == cppExceptionCode && pExceptionInfo->ContextRecord) {
         g_CxxExceptionContext = *pExceptionInfo->ContextRecord;
         g_bHasCxxExceptionContext = true;
+    }
+
+    // Log crash-type exceptions as they happen, so a crash that the game's own handler swallows still leaves a
+    // trace in latest.log. Probes and guarded calls report on their own, and are skipped here.
+    if (pExceptionInfo && pExceptionInfo->ExceptionRecord && rtti::probeDepth == 0 && g_sehGuardDepth == 0 &&
+        IsReportableFirstChance(pExceptionInfo->ExceptionRecord->ExceptionCode)) {
+        static __declspec(thread) bool inReport = false;
+        if (!inReport) {
+            inReport = true;
+            try {
+                DebugExceptionHandler::WriteSurvivedReport(pExceptionInfo, "First-chance exception");
+            } catch (...) {}
+            inReport = false;
+        }
     }
 
     return EXCEPTION_CONTINUE_SEARCH;
@@ -630,25 +664,33 @@ bool DebugExceptionHandler::IsHandlingCrash() {
 
 std::uintptr_t DebugExceptionHandler::RunWithSehGuard(SehCallback callback, void* context,
                                                       char const* reason) noexcept {
+    std::uintptr_t result = 0;
+    ++g_sehGuardDepth;
     __try {
         if (callback) {
-            return callback(context);
+            result = callback(context);
         }
     } __except (HandleSehException(GetExceptionInformation(), reason)) {
+        --g_sehGuardDepth;
         if (!g_lastSehSurvived) AbortProcess();
+        return 0;
     }
-
-    return 0;
+    --g_sehGuardDepth;
+    return result;
 }
 
 void DebugExceptionHandler::RunVoidWithSehGuard(SehVoidCallback callback, void* context, char const* reason) noexcept {
+    ++g_sehGuardDepth;
     __try {
         if (callback) {
             callback(context);
         }
     } __except (HandleSehException(GetExceptionInformation(), reason)) {
+        --g_sehGuardDepth;
         if (!g_lastSehSurvived) AbortProcess();
+        return;
     }
+    --g_sehGuardDepth;
 }
 
 std::string DebugExceptionHandler::GenerateStackTrace(CONTEXT* contextArg) {
@@ -803,7 +845,11 @@ void DebugExceptionHandler::WriteSurvivedReport(EXCEPTION_POINTERS* exceptionInf
 
     std::ostringstream report;
     report << "\n";
-    report << MakeCenteredDivider("Latite Survived Exception (execution continues)", '-', crashReportWidth) << "\n";
+    const bool firstChance = reason == "First-chance exception";
+    report << MakeCenteredDivider(firstChance ? "Exception seen (the game may handle it, or this may be the crash)"
+                                              : "Latite Survived Exception (execution continues)",
+                                  '-', crashReportWidth)
+           << "\n";
     report << "Time: " << MakeTimestamp(false) << "\n";
     report << "Reason: " << reason << "\n";
     report << "Thread ID: " << GetCurrentThreadId() << "\n";
@@ -822,10 +868,15 @@ void DebugExceptionHandler::WriteSurvivedReport(EXCEPTION_POINTERS* exceptionInf
     AppendRawLog(report.str());
 
     std::ostringstream stackReport;
-    try {
-        stackReport << GenerateStackTrace(&context);
-    } catch (...) {
-        stackReport << "Stack trace unavailable.\n";
+    if (exceptionInfo && exceptionInfo->ExceptionRecord &&
+        exceptionInfo->ExceptionRecord->ExceptionCode == 0xC00000FD) {
+        stackReport << "(no stack trace for a stack overflow)\n";
+    } else {
+        try {
+            stackReport << GenerateStackTrace(&context);
+        } catch (...) {
+            stackReport << "Stack trace unavailable.\n";
+        }
     }
     stackReport << "\n" << std::string(crashReportWidth, '-') << "\n";
     AppendRawLog(stackReport.str(), false);

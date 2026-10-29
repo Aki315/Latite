@@ -34,6 +34,17 @@ Hook::Hook(uintptr_t targetAddress, void* detourFunc, std::string const& hookNam
         Logger::Warn("Creation of hook {} failed with status {}", this->funcName, MH_StatusToString(res));
 #endif
     }
+#ifdef LATITE_DEBUG
+    else {
+        // The address and first bytes make it easy to see whether a hook landed on a real function start.
+        uint8_t bytes[8] = {};
+        const auto base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+        std::memcpy(bytes, reinterpret_cast<void*>(targetAddress), sizeof(bytes));
+        Logger::Info("[Hook] {} at exe+0x{:X}: {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}", this->funcName,
+                     targetAddress - base, bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                     bytes[7]);
+    }
+#endif
 }
 
 HookGroup::HookGroup(std::string const& groupName)

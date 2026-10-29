@@ -30,63 +30,83 @@ namespace rtti {
         return p >= 0x10000 && p < 0x00007FFFFFFFFFFFull && (p & 7) == 0;
     }
 
+    // Number of guarded probes running on this thread. The debug exception logger ignores access violations raised
+    // while it is above zero, since those are expected (that is what a probe is for).
+    inline thread_local int probeDepth = 0;
+
     inline bool readPtr(const void* addr, void** out) {
+        bool ok = false;
+        ++probeDepth;
         __try {
             *out = *reinterpret_cast<void* const*>(addr);
-            return true;
+            ok = true;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             *out = nullptr;
-            return false;
         }
+        --probeDepth;
+        return ok;
     }
 
     inline bool readBytes(const void* addr, void* out, size_t count) {
+        bool ok = false;
+        ++probeDepth;
         __try {
             std::memcpy(out, addr, count);
-            return true;
+            ok = true;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
-            return false;
         }
+        --probeDepth;
+        return ok;
     }
 
     inline bool readByte(const void* addr, uint8_t* out) {
+        bool ok = false;
+        ++probeDepth;
         __try {
             *out = *reinterpret_cast<const uint8_t*>(addr);
-            return true;
+            ok = true;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             *out = 0;
-            return false;
         }
+        --probeDepth;
+        return ok;
     }
 
     // Class name of the polymorphic object at obj, e.g. "LocalPlayer". False if obj isn't such an object.
+    // (The game has no RTTI for most of its classes, so this mostly says false.)
     inline bool className(const void* obj, char* out, size_t cap) {
         if (cap == 0) return false;
         out[0] = 0;
+        bool ok = false;
+        ++probeDepth;
         __try {
-            const auto o = reinterpret_cast<uintptr_t>(obj);
-            if (!plausiblePtr(o)) return false;
-            const uintptr_t vt = *reinterpret_cast<const uintptr_t*>(o);
-            if (!inImage(vt) || (vt & 7)) return false;
-            const uintptr_t col = *reinterpret_cast<const uintptr_t*>(vt - 8);
-            if (!inImage(col)) return false;
-            if (*reinterpret_cast<const uint32_t*>(col) != 1) return false; // COL signature (x64)
-            const uintptr_t td = imageBase() + *reinterpret_cast<const uint32_t*>(col + 12);
-            if (!inImage(td)) return false;
-            const char* n = reinterpret_cast<const char*>(td + 0x10);
-            if (n[0] != '.' || n[1] != '?' || n[2] != 'A') return false;
-            n += 4;
-            size_t i = 0;
-            while (n[i] && n[i] != '@' && i + 1 < cap && i < 200) {
-                out[i] = n[i];
-                i++;
-            }
-            out[i] = 0;
-            return i > 0;
+            do {
+                const auto o = reinterpret_cast<uintptr_t>(obj);
+                if (!plausiblePtr(o)) break;
+                const uintptr_t vt = *reinterpret_cast<const uintptr_t*>(o);
+                if (!inImage(vt) || (vt & 7)) break;
+                const uintptr_t col = *reinterpret_cast<const uintptr_t*>(vt - 8);
+                if (!inImage(col)) break;
+                if (*reinterpret_cast<const uint32_t*>(col) != 1) break; // COL signature (x64)
+                const uintptr_t td = imageBase() + *reinterpret_cast<const uint32_t*>(col + 12);
+                if (!inImage(td)) break;
+                const char* n = reinterpret_cast<const char*>(td + 0x10);
+                if (n[0] != '.' || n[1] != '?' || n[2] != 'A') break;
+                n += 4;
+                size_t i = 0;
+                while (n[i] && n[i] != '@' && i + 1 < cap && i < 200) {
+                    out[i] = n[i];
+                    i++;
+                }
+                out[i] = 0;
+                ok = i > 0;
+            } while (false);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             out[0] = 0;
-            return false;
+            ok = false;
         }
+        --probeDepth;
+        return ok;
     }
 
     // needle starting with '=' must equal the class name, otherwise it only has to be contained in it.
