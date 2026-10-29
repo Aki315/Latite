@@ -11,7 +11,9 @@ namespace SDK {
 
         RemoteConnector* getActiveConnector();
 
-        CLASS_FIELD(NetherNetConnector*, netherNetConnector, 0x68);
-        CLASS_FIELD(RakNetConnector*, rakNetConnector, 0x70);
+        static inline size_t offNetherNetConnector = 0x68;
+        static inline size_t offRakNetConnector = 0x70;
+        CLASS_FIELD_DYN(NetherNetConnector*, netherNetConnector, offNetherNetConnector);
+        CLASS_FIELD_DYN(RakNetConnector*, rakNetConnector, offRakNetConnector);
     };
 }

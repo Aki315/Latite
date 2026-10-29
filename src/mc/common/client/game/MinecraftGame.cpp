@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "MinecraftGame.h"
 #include "mc/Addresses.h"
+#include "util/Rtti.h"
 
 namespace {
     struct ClientInterface {
@@ -10,6 +11,21 @@ namespace {
 
     static_assert(offsetof(ClientInterface, clientInstance) == 0x8);
     static_assert(sizeof(ClientInterface) == 0x18);
+}
+
+bool SDK::MinecraftGame::calibrate(MinecraftGame* game) {
+    static bool found = false;
+    if (found) return true;
+    const size_t off = rtti::findPointerField(game, offGameRenderer, 0x400, "GameRenderer");
+    if (!off) return false;
+    if (off != offGameRenderer) {
+        Logger::Info("[Offsets] MinecraftGame.gameRenderer moved: +0x{:X} -> +0x{:X}", offGameRenderer, off);
+    } else {
+        Logger::Info("[Offsets] MinecraftGame.gameRenderer at +0x{:X}", off);
+    }
+    offGameRenderer = off;
+    found = true;
+    return true;
 }
 
 bool SDK::MinecraftGame::isCursorGrabbed() {
@@ -30,16 +46,6 @@ namespace {
     constexpr size_t kScanStart = 0x600;
     constexpr size_t kScanEnd = 0x1400;
 
-    bool inImage(uintptr_t p) {
-        static uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
-        static uintptr_t size = [] {
-            auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-            auto nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
-            return static_cast<uintptr_t>(nt->OptionalHeader.SizeOfImage);
-        }();
-        return p >= base && p < base + size;
-    }
-
     // Returns the ClientInstance of the node with key 0 in a map whose object sits at mapObj, or null.
     void* readPrimaryFromMap(uintptr_t mapObj) {
         __try {
@@ -58,7 +64,7 @@ namespace {
                     const uintptr_t ctrl = *reinterpret_cast<const uintptr_t*>(node + 0x38);
                     if (inst < 0x10000 || (inst & 7) || ctrl < 0x10000) return nullptr;
                     const uintptr_t vt = *reinterpret_cast<const uintptr_t*>(inst);
-                    if (!inImage(vt)) return nullptr;
+                    if (!rtti::inImage(vt)) return nullptr;
                     return reinterpret_cast<void*>(inst);
                 }
                 node = *reinterpret_cast<const uintptr_t*>(node + (0 < key ? 0 : 0x10)); // key>0: left, else right
