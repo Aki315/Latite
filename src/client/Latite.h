@@ -66,8 +66,9 @@ public:
     ~Latite() = default;
 
     static constexpr std::string_view version = "v2.9.1";
-    static constexpr std::array<std::string_view, 1> supportedMinecraftVersions = {
+    static constexpr std::array<std::string_view, 2> supportedMinecraftVersions = {
         "1.26.5x",
+        "1.26.6x",
     };
 
     [[nodiscard]] static constexpr bool supportsMinecraftVersion(std::string_view version) noexcept {
