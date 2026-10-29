@@ -83,7 +83,7 @@ public:
     inline static SigImpl Options_setPerspective { [](memory::signature_store&, uintptr_t res) {
                                                       return res;
                                                   },
-                                                   "56 57 48 83 EC ? 89 D6 48 89 CF 48 8B 81"_sig,
+                                                   "56 57 53 48 83 EC ? 89 D6 48 89 CF 48 8B 81"_sig,
                                                    "Options::setPerspective" };
 
     inline static SigImpl Options_getHideHand {
@@ -271,7 +271,7 @@ public:
         [](memory::signature_store& store, uintptr_t) {
             return store.deref(1);
         },
-        "E8 ? ? ? ? 48 8D 55 ? 4C 8D 85 ? ? ? ? 48 89 F1 E8 ? ? ? ? 80 BF"_sig, "ItemRenderer::renderGuiItemNew"
+        "E8 ? ? ? ? 90 48 8D 55 ? 4C 8D 85 ? ? ? ? 48 89 F1 E8 ? ? ? ? 90 80 BF"_sig, "ItemRenderer::renderGuiItemNew"
     };
 
     inline static SigImpl ActorRenderDispatcher_render {
@@ -392,7 +392,7 @@ public:
         [](memory::signature_store& store, uintptr_t) {
             return store.deref(3);
         },
-        "48 8D 15 ? ? ? ? 4C 8D 45 ? E8 ? ? ? ? 48 8D 4D ? E8 ? ? ? ? 48 8D 0D ? ? ? ? E8 ? ? ? ? 48 8D 0D ? ? ? ? E8 ? ? ? ? E9 ? ? ? ? 48 8D 0D"_sig,
+        "48 8D 15 ? ? ? ? 4C 8D 45 ? E8 ? ? ? ? 90 48 8D 4D ? E8 ? ? ? ? 48 8D 0D ? ? ? ? E8 ? ? ? ? 48 8D 0D ? ? ? ? E8 ? ? ? ? E9 ? ? ? ? 48 8D 0D"_sig,
         "mce::RenderMaterialGroup::common"
     };
 
@@ -408,7 +408,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "55 41 56 56 57 53 48 83 EC ? 48 8D 6C 24 ? 48 C7 45 ? ? ? ? ? 44 89 CB 44 89 C6 48 89 D7 49 89 CE 48 83 79 ? ? 75"_sig,
+        "55 41 56 56 57 53 48 83 EC ? 48 8D 6C 24 ? 48 C7 45 ? ? ? ? ? ? 89 ? 44 89 ? 48 89 D7 49 89 CE 48 83 79"_sig,
         "ClientInstanceScreenModel::forwardSoundSubtitle"
     };
 
