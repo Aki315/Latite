@@ -159,7 +159,7 @@ public:
     inline static SigImpl MinecraftGame__update { [](memory::signature_store& store, uintptr_t) {
                                                      return store.deref(1);
                                                  },
-                                                  "E8 ? ? ? ? 48 8B 8F ? ? ? ? BA ? ? ? ? E8 ? ? ? ? 48 8B 9F"_sig,
+                                                  "E8 ? ? ? ? 90 48 8B 8F ? ? ? ? BA ? ? ? ? E8 ? ? ? ? 90 48 8B 9F ? ? ? ? E8 ? ? ? ? 48 89 C7 E8"_sig,
                                                   "MinecraftGame::_update" };
 
     inline static SigImpl AppPlatform_GameCorePC_pickImage {
