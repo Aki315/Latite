@@ -27,9 +27,12 @@ namespace eventing_detail {
     inline void __cdecl guardedCallThunk(void* context) {
         auto* call = static_cast<GuardedCall*>(context);
 #ifdef LATITE_DEBUG
-        latiteTraceListener(*call->ev, call->fptr);
+        const bool first = latiteTraceListener(*call->ev, call->fptr);
 #endif
         (call->listener->*call->fptr)(*call->ev);
+#ifdef LATITE_DEBUG
+        if (first) Logger::Info("[Trace] that listener returned");
+#endif
     }
 }
 #endif

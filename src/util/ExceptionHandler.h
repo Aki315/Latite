@@ -35,6 +35,8 @@ namespace DebugExceptionHandler {
     std::string GenerateStackTrace(CONTEXT* contextArg = nullptr, HANDLE threadHandle = nullptr);
     // Debug builds: a background thread that writes every thread's stack to latest.log when the game stops running hooks.
     void StartHangWatchdog();
+    // "Module!function+0xOFFSET (file:line)" for an address; needs the .pdb next to the DLL for Latite code.
+    std::string DescribeAddress(uintptr_t address);
     std::filesystem::path WriteCrashReport(EXCEPTION_POINTERS* exceptionInfo, std::string_view reason);
     // Logs an access violation (once per faulting address) without a minidump and without ending the process.
     void WriteSurvivedReport(EXCEPTION_POINTERS* exceptionInfo, std::string_view reason);

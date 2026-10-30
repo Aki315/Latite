@@ -551,6 +551,15 @@ namespace {
     }
 }
 
+namespace {
+    HANDLE g_soEvent = nullptr;
+    HANDLE g_soDone = nullptr;
+    HANDLE g_soThreadHandle = nullptr;
+    EXCEPTION_RECORD g_soRecord = {};
+    CONTEXT g_soContext = {};
+    std::atomic<int> g_soFlag { 0 };
+}
+
 __declspec(thread) CONTEXT g_CxxExceptionContext = {};
 __declspec(thread) bool g_bHasCxxExceptionContext = false;
 __declspec(thread) int g_ErrorBoundaryDepth = 0;
@@ -560,6 +569,20 @@ LONG WINAPI VectoredExceptionHandler(PEXCEPTION_POINTERS pExceptionInfo) {
         pExceptionInfo->ExceptionRecord->ExceptionCode == cppExceptionCode && pExceptionInfo->ContextRecord) {
         g_CxxExceptionContext = *pExceptionInfo->ContextRecord;
         g_bHasCxxExceptionContext = true;
+    }
+
+    // A stack overflow leaves almost no stack to work with, so the report is written by a helper thread that was
+    // started in advance; this thread only hands over the registers and waits.
+    if (pExceptionInfo && pExceptionInfo->ExceptionRecord &&
+        pExceptionInfo->ExceptionRecord->ExceptionCode == 0xC00000FD && g_soEvent && g_soDone &&
+        g_soFlag.exchange(1) == 0) {
+        DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &g_soThreadHandle, 0, FALSE,
+                        DUPLICATE_SAME_ACCESS);
+        g_soRecord = *pExceptionInfo->ExceptionRecord;
+        g_soContext = *pExceptionInfo->ContextRecord;
+        SetEvent(g_soEvent);
+        WaitForSingleObject(g_soDone, 8000);
+        return EXCEPTION_CONTINUE_SEARCH;
     }
 
     // Log crash-type exceptions as they happen, so a crash that the game's own handler swallows still leaves a
@@ -992,8 +1015,44 @@ namespace {
     }
 }
 
+namespace {
+    DWORD WINAPI StackOverflowReporterProc(LPVOID) {
+        WaitForSingleObject(g_soEvent, INFINITE);
+        try {
+            std::ostringstream head;
+            head << "\n" << MakeCenteredDivider("STACK OVERFLOW (infinite recursion)", '-', crashReportWidth) << "\n";
+            head << "Time: " << MakeTimestamp(false) << "\n";
+            head << "Faulting address: " << FormatAddress(reinterpret_cast<DWORD64>(g_soRecord.ExceptionAddress))
+                 << "\n";
+            const char* last = latiteLastHook.load();
+            head << "Last hook that ran: " << (last ? last : "(none)") << "\n";
+            AppendRawLog(head.str());
+            AppendRawLog(DebugExceptionHandler::GenerateStackTrace(&g_soContext, g_soThreadHandle) +
+                             std::string(crashReportWidth, '-') + "\n",
+                         false);
+        } catch (...) {}
+        SetEvent(g_soDone);
+        return 0;
+    }
+}
+
+std::string DebugExceptionHandler::DescribeAddress(uintptr_t address) {
+    try {
+        HANDLE process = GetCurrentProcess();
+        CriticalSectionGuard symbolGuard(EnterSymbolLock, LeaveSymbolLock);
+        if (EnsureSymbolsLocked()) return FormatStackFrame(process, address);
+    } catch (...) {}
+    return FormatAddress(address);
+}
+
 void DebugExceptionHandler::StartHangWatchdog() {
     if (watchdogStarted.exchange(true)) return;
+    g_soEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    g_soDone = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (g_soEvent && g_soDone) {
+        HANDLE so = CreateThread(nullptr, 0, StackOverflowReporterProc, nullptr, 0, nullptr);
+        if (so) CloseHandle(so);
+    }
     HANDLE h = CreateThread(nullptr, 0, HangWatchdogProc, nullptr, 0, nullptr);
     if (h) CloseHandle(h);
 }
