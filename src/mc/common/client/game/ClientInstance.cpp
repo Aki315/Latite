@@ -5,6 +5,9 @@
 #include "MinecraftGame.h"
 #include "mc/common/world/Minecraft.h"
 #include "util/RttiLog.h"
+#include <cmath>
+#include <cstring>
+#include <vector>
 
 SDK::ClientInstance* SDK::ClientInstance::instance = nullptr;
 
@@ -73,6 +76,7 @@ void SDK::ClientInstance::calibrate(ClientInstance* inst, MinecraftGame* game) {
         Minecraft::calibrate(static_cast<Minecraft*>(mc));
     }
     MinecraftGame::calibrate(game);
+    calibrateGuiData(inst);
 
     if (calibrationAttempts >= 200) {
         calibrationDone = true;
@@ -86,9 +90,14 @@ SDK::BlockSource* SDK::ClientInstance::getRegion() {
 }
 
 SDK::LocalPlayer* SDK::ClientInstance::getLocalPlayer() {
-    // The virtual function index (0x1F) is not known for 1.26.60. Until the pointer's field is found from a hook that
-    // receives the player, report "no player" instead of calling an unknown function.
-    if (offLocalPlayer < 0) return nullptr;
+    // ClientInstance has no virtual function table of its own in 1.26.60 (it used to have getLocalPlayer in slot
+    // 0x1F). The player's field is found by looking for the object that holds the game's PacketSender pointer, or from
+    // a hook that receives the player. Until then, report "no player".
+    if (offLocalPlayer < 0) {
+        static unsigned calls = 0;
+        if (++calls % 300 == 1) discoverLocalPlayer();
+        if (offLocalPlayer < 0) return nullptr;
+    }
     void* p = nullptr;
     if (!rtti::readPtr(reinterpret_cast<char*>(this) + offLocalPlayer, &p) || !p) return nullptr;
     // Only hand out something that looks like a live game object (starts with a vtable in the game image).
@@ -97,6 +106,65 @@ SDK::LocalPlayer* SDK::ClientInstance::getLocalPlayer() {
         !rtti::inImage(reinterpret_cast<uintptr_t>(vt)))
         return nullptr;
     return static_cast<LocalPlayer*>(p);
+}
+
+void SDK::ClientInstance::discoverLocalPlayer() {
+    if (offLocalPlayer >= 0 || !instance) return;
+    void* packetSender = nullptr;
+    if (!rtti::readPtr(reinterpret_cast<char*>(instance) + offPacketSender, &packetSender) || !packetSender) return;
+
+    static std::vector<uint8_t> block;
+    block.resize(0x1800);
+    struct Candidate {
+        size_t field;
+        size_t holds;
+        size_t vtableSlots;
+    };
+    std::vector<Candidate> found;
+    for (size_t off = 0x100; off < 0x1000; off += 8) {
+        void* p = nullptr;
+        if (!rtti::readPtr(reinterpret_cast<char*>(instance) + off, &p) || !p) continue;
+        if (!rtti::plausiblePtr(reinterpret_cast<uintptr_t>(p)) || p == packetSender) continue;
+        void* vt = nullptr;
+        if (!rtti::readPtr(p, &vt) || !rtti::inImage(reinterpret_cast<uintptr_t>(vt))) continue;
+        if (!rtti::readBytes(p, block.data(), block.size())) continue;
+        for (size_t d = 8; d + 8 <= block.size(); d += 8) {
+            void* v;
+            std::memcpy(&v, block.data() + d, 8);
+            if (v != packetSender) continue;
+            size_t slots = 0;
+            for (; slots < 0x400; slots++) {
+                void* fn = nullptr;
+                if (!rtti::readPtr(reinterpret_cast<char*>(vt) + slots * 8, &fn) ||
+                    !rtti::inImage(reinterpret_cast<uintptr_t>(fn)))
+                    break;
+            }
+            found.push_back({ off, d, slots });
+            break;
+        }
+    }
+    static unsigned reports = 0;
+    if (found.empty()) {
+        if (reports++ < 2) Logger::Info("[Offsets] no ClientInstance field points at an object holding the PacketSender");
+        return;
+    }
+    const Candidate* best = &found[0];
+    for (auto& c : found) {
+        Logger::Info("[Offsets] ClientInstance+0x{:X} -> object holding the PacketSender at +0x{:X}, vtable has {} slots",
+                     c.field, c.holds, c.vtableSlots);
+        if (c.vtableSlots > best->vtableSlots) best = &c;
+    }
+    // A player/actor class has a long virtual function table; the other holders do not.
+    if (best->vtableSlots >= 0x80) {
+        offLocalPlayer = static_cast<ptrdiff_t>(best->field);
+        Logger::Info("[Offsets] ClientInstance.localPlayer taken from +0x{:X}", best->field);
+        void* p = nullptr;
+        rtti::readPtr(reinterpret_cast<char*>(instance) + best->field, &p);
+        if (p) {
+            rtti::logVtable("LocalPlayer", p, 0, 0x120);
+            rtti::logPointerMap("LocalPlayer", p, 0, 0x400);
+        }
+    }
 }
 
 bool SDK::ClientInstance::calibrateLocalPlayer(void* player) {
@@ -128,6 +196,51 @@ bool SDK::ClientInstance::calibrateLocalPlayer(void* player) {
     rtti::logVtable("LocalPlayer", player, 0, 0x120);
     rtti::logPointerMap("LocalPlayer", player, 0, 0x400);
     return true;
+}
+
+namespace {
+    // GuiData keeps the window size, the gui size and the scale as floats, and they must agree with each other.
+    bool looksLikeGuiData(void* g) {
+        float f[0x70 / 4] = {};
+        if (!g || !rtti::readBytes(g, f, sizeof(f))) return false;
+        const float sx = f[0x40 / 4], sy = f[0x44 / 4], gx = f[0x50 / 4], gy = f[0x54 / 4];
+        const float sc = f[0x5C / 4], fr = f[0x60 / 4];
+        return sx >= 200.f && sx <= 20000.f && sy >= 200.f && sy <= 20000.f && sc >= 0.5f && sc <= 16.f && fr > 0.f &&
+               std::fabs(fr * sc - 1.f) < 0.02f && std::fabs(gx * sc - sx) < 3.f && std::fabs(gy * sc - sy) < 3.f;
+    }
+    bool guiDataValidated = false;
+}
+
+void SDK::ClientInstance::calibrateGuiData(ClientInstance* inst) {
+    if (guiDataValidated) return;
+    void* g = nullptr;
+    rtti::readPtr(reinterpret_cast<char*>(inst) + offGuiData, &g);
+    if (looksLikeGuiData(g)) {
+        guiDataValidated = true;
+        Logger::Info("[Offsets] GuiData found at ClientInstance+0x{:X}", offGuiData);
+        return;
+    }
+    for (size_t off = 0x100; off < 0x1000; off += 8) {
+        void* p = nullptr;
+        if (!rtti::readPtr(reinterpret_cast<char*>(inst) + off, &p) || !p) continue;
+        if (!rtti::plausiblePtr(reinterpret_cast<uintptr_t>(p))) continue;
+        if (looksLikeGuiData(p)) {
+            offGuiData = off;
+            guiDataValidated = true;
+            Logger::Info("[Offsets] GuiData moved to ClientInstance+0x{:X}", off);
+            return;
+        }
+    }
+    static unsigned reports = 0;
+    if (reports++ == 0 && g) {
+        float f[0x70 / 4] = {};
+        rtti::readBytes(g, f, sizeof(f));
+        Logger::Warn("[Offsets] GuiData not found. Floats at ClientInstance+0x{:X}'s object, from +0x30: "
+                     "{} {} {} {} | {} {} {} {} | {} {} {} {} | {} {} {} {}",
+                     offGuiData, f[0x30 / 4], f[0x34 / 4], f[0x38 / 4], f[0x3C / 4], f[0x40 / 4], f[0x44 / 4],
+                     f[0x48 / 4], f[0x4C / 4], f[0x50 / 4], f[0x54 / 4], f[0x58 / 4], f[0x5C / 4], f[0x60 / 4],
+                     f[0x64 / 4], f[0x68 / 4], f[0x6C / 4]);
+    }
 }
 
 SDK::GuiData* SDK::ClientInstance::getGuiData() {

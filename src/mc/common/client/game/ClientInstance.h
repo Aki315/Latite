@@ -40,6 +40,8 @@ namespace SDK {
         void releaseCursor();
 
     private:
+        static void discoverLocalPlayer();
+        static void calibrateGuiData(ClientInstance* inst);
         static void calibrate(ClientInstance* inst, class MinecraftGame* game);
         static ClientInstance* instance;
     };

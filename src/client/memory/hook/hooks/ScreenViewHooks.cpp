@@ -7,6 +7,7 @@
 #include "mc/common/client/gui/controls/VisualTree.h"
 #include "mc/common/client/gui/controls/UIControl.h"
 #include "../Hooks.h"
+#include "util/RttiLog.h"
 #include <client/script/PluginManager.h>
 
 namespace {
@@ -17,6 +18,23 @@ void __fastcall ScreenViewHooks::setupAndRender(SDK::ScreenView* view, void* ctx
     LATITE_TRACE_HOOK("ScreenViewHooks::setupAndRender");
     setupAndRenderHook->oFunc<decltype(&setupAndRender)>()(view, ctx);
     LATITE_TRACE_HOOK("setupAndRender: original returned");
+#ifdef LATITE_DEBUG
+    {
+        static bool dumped = false;
+        if (!dumped) {
+            dumped = true;
+            // What the hook receives: a MinecraftUIRenderContext starts with {vtable, ClientInstance*, ScreenContext*}.
+            void* second = nullptr;
+            rtti::readPtr(reinterpret_cast<char*>(ctx) + 8, &second);
+            Logger::Info("[UI] setupAndRender: view=0x{:X} ctx=0x{:X} ctx+8=0x{:X} (ClientInstance is 0x{:X})",
+                         reinterpret_cast<uintptr_t>(view), reinterpret_cast<uintptr_t>(ctx),
+                         reinterpret_cast<uintptr_t>(second), reinterpret_cast<uintptr_t>(SDK::ClientInstance::get()));
+            rtti::logVtable("UIRenderContext", ctx, 0, 0x30);
+            rtti::logPointerMap("ScreenView", view, 0, 0x100);
+            rtti::logPointerMap("UIRenderContext", ctx, 0, 0x40);
+        }
+    }
+#endif
     RenderLayerEvent ev { view, reinterpret_cast<SDK::MinecraftUIRenderContext*>(ctx) };
     Eventing::get().dispatch(ev);
     LATITE_TRACE_HOOK("setupAndRender: RenderLayerEvent dispatched");

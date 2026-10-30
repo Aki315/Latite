@@ -1,5 +1,7 @@
 #include "pch.h"
 #include "GeneralHooks.h"
+#include "util/InputFallback.h"
+#include "util/Rtti.h"
 #include "client/Latite.h"
 #include "client/misc/ClientMessageQueue.h"
 #include "client/feature/command/commandmanager.h"
@@ -55,6 +57,24 @@ void GenericHooks::MultiPlayerLevel__subTick(SDK::Level* level) {
 }
 
 void* GenericHooks::ChatScreenController_sendChatMessage(void* controller, std::string& message) {
+#ifdef LATITE_DEBUG
+    {
+        static int logged = 0;
+        if (logged++ < 20) {
+            uint64_t raw[4] = {};
+            const bool readable = rtti::readBytes(&message, raw, sizeof(raw));
+            if (readable && raw[2] <= raw[3] && raw[3] < 0x100000) {
+                Logger::Info("[Chat] sendChatMessage called: controller=0x{:X} message=\"{}\" prefix=\"{}\"",
+                             reinterpret_cast<uintptr_t>(controller), message.substr(0, 80),
+                             Latite::getCommandManager().prefix);
+            } else {
+                Logger::Warn("[Chat] sendChatMessage called, but the 2nd argument is not a std::string: "
+                             "{:X} {:X} {:X} {:X}",
+                             raw[0], raw[1], raw[2], raw[3]);
+            }
+        }
+    }
+#endif
     LATITE_TRACE_HOOK("GenericHooks::ChatScreenController_sendChatMessage");
     if (message.starts_with(Latite::getCommandManager().prefix)) {
         Latite::getCommandManager().runCommand(message);
@@ -88,6 +108,7 @@ void* GenericHooks::GameRenderer_renderCurrentFrame(void* rend) {
 
 LRESULT GenericHooks::MainWindow__windowProcCallback(HWND hwnd, UINT msg, WPARAM wParam,
                                                      LPARAM lParam) { // Name from China
+    LATITE_TRACE_HOOK("GenericHooks::MainWindow__windowProcCallback");
     if (msg == WM_SETCURSOR) {
         std::optional<std::reference_wrapper<Screen>> activeScreen = Latite::get().getScreenManager().getActiveScreen();
         SDK::GameCore* gameCore = SDK::GameCore::get();
@@ -105,6 +126,8 @@ LRESULT GenericHooks::MainWindow__windowProcCallback(HWND hwnd, UINT msg, WPARAM
     // They are treated like normal keys here, otherwise Alt can never be bound to anything (Freelook, for example).
     const bool isSystemKey = msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP;
     if (msg == WM_KEYDOWN || msg == WM_KEYUP || isSystemKey) {
+        LATITE_TRACE_HOOK("windowProc hook: first key message");
+        input_fallback::mainHookSawKey.store(true);
         const int key = wParam & 0xFF;
         const bool isDown = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
 

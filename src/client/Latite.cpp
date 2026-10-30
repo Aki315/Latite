@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "Latite.h"
+#include "util/InputFallback.h"
 #include "BuildTimestamp.h"
 #include "localization/LocalizeString.h"
 
@@ -619,6 +620,7 @@ void Latite::threadsafeInit() {
     Latite::getPluginManager().loadPrerunScripts();
     Logger::Info("Loaded startup scripts");
 
+    input_fallback::install();
     Logger::Info("[Trace] threadsafeInit: applying module config");
     Latite::getConfigManager().applyModuleConfig();
     Logger::Info("[Trace] threadsafeInit: module config applied");
