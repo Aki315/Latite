@@ -10,6 +10,7 @@ namespace {
 }
 
 Color* RenderControllerHooks::getOverlayColor(void* thisptr, Color* out, void* ent) {
+    LATITE_TRACE_HOOK("RenderControllerHooks::getOverlayColor");
     GetOverlayColorHook->oFunc<decltype(&getOverlayColor)>()(thisptr, out, ent);
     OverlayColorEvent ev { *out, hat::member_at<SDK::Actor*>(ent, 0x38), thisptr }; // xref: getOverlayColor itself
     {

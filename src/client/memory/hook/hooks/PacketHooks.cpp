@@ -20,6 +20,7 @@ namespace {
 }
 
 void PacketHooks::PacketSender_sendToServer(SDK::PacketSender* sender, SDK::Packet* packet) {
+    LATITE_TRACE_HOOK("PacketHooks::PacketSender_sendToServer");
     SendPacketEvent ev { packet };
 
     if (Eventing::get().dispatch(ev)) {
@@ -30,6 +31,7 @@ void PacketHooks::PacketSender_sendToServer(SDK::PacketSender* sender, SDK::Pack
 }
 
 std::shared_ptr<SDK::Packet> PacketHooks::MinecraftPackets_createPacket(SDK::PacketID packetId) {
+    LATITE_TRACE_HOOK("PacketHooks::MinecraftPackets_createPacket");
     auto genPacket = CreatePacketHook->oFunc<decltype(&MinecraftPackets_createPacket)>()(packetId);
 
     return genPacket;

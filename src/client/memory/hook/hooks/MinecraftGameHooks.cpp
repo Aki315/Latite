@@ -32,6 +32,7 @@ namespace {
 }
 
 void MinecraftGameHooks::onDeviceLost(SDK::MinecraftGame* game) {
+    LATITE_TRACE_HOOK("MinecraftGameHooks::onDeviceLost");
     FocusLostEvent ev {};
 
     if (Eventing::get().dispatch(ev)) return;
@@ -40,6 +41,7 @@ void MinecraftGameHooks::onDeviceLost(SDK::MinecraftGame* game) {
 }
 
 void __fastcall MinecraftGameHooks::_update(SDK::MinecraftGame* game) {
+    LATITE_TRACE_EVERY("MinecraftGame::_update", 1800);
 #ifdef LATITE_CRASH_REPORTING
     DebugExceptionHandler::RunVoidWithSehGuard(updateSehThunk, game,
                                                "Caught SEH exception in MinecraftGame::_update hook");

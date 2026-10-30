@@ -14,6 +14,7 @@ namespace {
 }
 
 float OptionHooks::Options_getGamma(void* options, void* a2) {
+    LATITE_TRACE_HOOK("OptionHooks::Options_getGamma");
     auto o = getGammaHook->oFunc<decltype(&Options_getGamma)>()(options, a2);
     GammaEvent ev { o };
     Eventing::get().dispatch(ev);
@@ -21,6 +22,7 @@ float OptionHooks::Options_getGamma(void* options, void* a2) {
 }
 
 int OptionHooks::Options_getPerspective(void* options) {
+    LATITE_TRACE_HOOK("OptionHooks::Options_getPerspective");
     auto o = getPerspectiveHook->oFunc<decltype(&Options_getPerspective)>()(options);
     PerspectiveEvent ev { o };
     Eventing::get().dispatch(ev);
@@ -28,6 +30,7 @@ int OptionHooks::Options_getPerspective(void* options) {
 }
 
 bool OptionHooks::Options_getHideHand(void* options) {
+    LATITE_TRACE_HOOK("OptionHooks::Options_getHideHand");
     auto o = getHideHandHook->oFunc<decltype(&Options_getHideHand)>()(options);
     HideHandEvent ev { o };
     Eventing::get().dispatch(ev);
@@ -35,6 +38,7 @@ bool OptionHooks::Options_getHideHand(void* options) {
 }
 
 float OptionHooks::Options_getSensitivity(void* options, unsigned int a2, int a3, int a4, int a5) {
+    LATITE_TRACE_HOOK("OptionHooks::Options_getSensitivity");
     auto o = getSensitivityHook->oFunc<decltype(&Options_getSensitivity)>()(options, a2, a3, a4, a5);
     SensitivityEvent ev { o };
     Eventing::get().dispatch(ev);

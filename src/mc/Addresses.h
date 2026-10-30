@@ -122,7 +122,7 @@ public:
         [](memory::signature_store& storage, uintptr_t) {
             return storage.deref(1);
         },
-        "E8 ? ? ? ? 3C ? 75 ? 48 8B 8E ? ? ? ? 48 C7 45 ? ? ? ? ? 48 8B 01 48 8B 40 ? 48 8D 55 ? FF 15 ? ? ? ? 48 8B 4D"_sig,
+        "E8 ? ? ? ? 3C ? 75 ? 48 8B 8E ? ? ? ? 48 C7 45 ? ? ? ? ? 48 8B 01 48 8B 40 ? 48 8D 55 ? FF 15 ? ? ? ? 90 48 8B 4D ? 48 85 C9 74 ? 48 8D 45 ? 48 39 C1 0F 95 C2 48 8B 01"_sig,
         "ClientInstanceScreenModel::sendChatMessage"
     };
 
@@ -152,7 +152,7 @@ public:
         [](memory::signature_store& store, uintptr_t) {
             return store.deref(1);
         },
-        "E8 ? ? ? ? 48 8B 4B ? 48 85 C9 74 ? 48 8B 01 48 8B 40 ? 48 89 FA FF 15 ? ? ? ? 48 8D 4D"_sig,
+        "E8 ? ? ? ? 90 48 8B 4B ? 48 85 C9 74 ? 48 8B 01 48 8B 40 ? 48 89 FA FF 15 ? ? ? ? 90 48 8D 4D ? E8"_sig,
         "ScreenView::setupAndRender"
     };
 

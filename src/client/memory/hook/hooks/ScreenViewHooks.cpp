@@ -14,6 +14,7 @@ namespace {
 }
 
 void __fastcall ScreenViewHooks::setupAndRender(SDK::ScreenView* view, void* ctx) {
+    LATITE_TRACE_HOOK("ScreenViewHooks::setupAndRender");
     setupAndRenderHook->oFunc<decltype(&setupAndRender)>()(view, ctx);
     RenderLayerEvent ev { view, reinterpret_cast<SDK::MinecraftUIRenderContext*>(ctx) };
     Eventing::get().dispatch(ev);

@@ -11,6 +11,7 @@ namespace {
 }
 
 void LevelRendererHooks::LevelRenderer_renderLevel(SDK::LevelRenderer* lvl, SDK::ScreenContext* scn, void* unk) {
+    LATITE_TRACE_HOOK("LevelRendererHooks::LevelRenderer_renderLevel");
     SDK::ScreenContext::instance3d = scn;
 
     {

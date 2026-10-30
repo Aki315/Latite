@@ -76,6 +76,7 @@ HRESULT WINAPI DXHooks::CreateSwapChainForHWNDHook(IDXGIFactory2* factory, IUnkn
 }
 
 HRESULT __stdcall DXHooks::SwapChain_Present(IDXGISwapChain* chain, UINT SyncInterval, UINT Flags) {
+    LATITE_TRACE_EVERY("SwapChain::Present", 1800);
     auto& renderer = Latite::getRenderer();
     bool isGameSwapChain = false;
     if (Latite::get().isEjectReadyForRenderThread()) {

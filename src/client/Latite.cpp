@@ -619,7 +619,9 @@ void Latite::threadsafeInit() {
     Latite::getPluginManager().loadPrerunScripts();
     Logger::Info("Loaded startup scripts");
 
+    Logger::Info("[Trace] threadsafeInit: applying module config");
     Latite::getConfigManager().applyModuleConfig();
+    Logger::Info("[Trace] threadsafeInit: module config applied");
 
     Latite::getRenderer().setShouldInit();
 
@@ -628,6 +630,7 @@ void Latite::threadsafeInit() {
     Latite::getNotifications().push(
         util::FormatWString(LocalizeString::get("client.intro.menubutton"),
                             { util::StrToWStr(util::KeyToString(Latite::get().getMenuKey().value)) }));
+    Logger::Info("[Trace] threadsafeInit: done");
 }
 
 static void setModuleBlocked(std::string_view moduleName, bool shouldBlock) {
