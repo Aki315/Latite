@@ -16,8 +16,10 @@ namespace {
 void __fastcall ScreenViewHooks::setupAndRender(SDK::ScreenView* view, void* ctx) {
     LATITE_TRACE_HOOK("ScreenViewHooks::setupAndRender");
     setupAndRenderHook->oFunc<decltype(&setupAndRender)>()(view, ctx);
+    LATITE_TRACE_HOOK("setupAndRender: original returned");
     RenderLayerEvent ev { view, reinterpret_cast<SDK::MinecraftUIRenderContext*>(ctx) };
     Eventing::get().dispatch(ev);
+    LATITE_TRACE_HOOK("setupAndRender: RenderLayerEvent dispatched");
 
     if (view->visualTree->rootControl->name == "debug_screen") {
         PluginManager::Event ev { L"render2d", {}, false };
@@ -33,8 +35,10 @@ void __fastcall ScreenViewHooks::setupAndRender(SDK::ScreenView* view, void* ctx
         }
     }
 
+    LATITE_TRACE_HOOK("setupAndRender: before RenderGameEvent");
     RenderGameEvent evt {};
     Eventing::get().dispatch(evt);
+    LATITE_TRACE_HOOK("setupAndRender: finished");
 }
 
 ScreenViewHooks::ScreenViewHooks()

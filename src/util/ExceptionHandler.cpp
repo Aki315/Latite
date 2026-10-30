@@ -6,6 +6,8 @@
 
 #include <atomic>
 #include "util/Rtti.h"
+#include "util/Trace.h"
+#include <tlhelp32.h>
 #include <cstdlib>
 #include <dbghelp.h>
 #include <iomanip>
@@ -614,6 +616,9 @@ void DebugExceptionHandler::Install() {
         previousTerminateHandler = std::set_terminate(TerminateHandler);
         handlersInstalled = true;
     }
+#ifdef LATITE_DEBUG
+    StartHangWatchdog();
+#endif
 }
 
 void DebugExceptionHandler::Uninstall() {
@@ -693,9 +698,9 @@ void DebugExceptionHandler::RunVoidWithSehGuard(SehVoidCallback callback, void* 
     --g_sehGuardDepth;
 }
 
-std::string DebugExceptionHandler::GenerateStackTrace(CONTEXT* contextArg) {
+std::string DebugExceptionHandler::GenerateStackTrace(CONTEXT* contextArg, HANDLE threadHandle) {
     HANDLE process = GetCurrentProcess();
-    HANDLE thread = GetCurrentThread();
+    HANDLE thread = threadHandle ? threadHandle : GetCurrentThread();
 
     CONTEXT context = {};
     if (contextArg) {
@@ -880,6 +885,117 @@ void DebugExceptionHandler::WriteSurvivedReport(EXCEPTION_POINTERS* exceptionInf
     }
     stackReport << "\n" << std::string(crashReportWidth, '-') << "\n";
     AppendRawLog(stackReport.str(), false);
+}
+
+namespace {
+    std::atomic<bool> watchdogStarted { false };
+    std::atomic<bool> watchdogStop { false };
+
+    void DumpAllThreadStacks(const char* when, DWORD seconds) {
+        std::ostringstream head;
+        head << "\n" << MakeCenteredDivider("Hang detected: no hook has run for a while", '-', crashReportWidth) << "\n";
+        head << "Time: " << MakeTimestamp(false) << " (" << when << ", " << seconds << " s without progress)\n";
+        const char* last = latiteLastHook.load();
+        head << "Last hook that ran: " << (last ? last : "(none)") << " on thread " << latiteLastHookThread.load()
+             << "\n";
+        AppendRawLog(head.str());
+
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if (snap == INVALID_HANDLE_VALUE) return;
+        THREADENTRY32 te = {};
+        te.dwSize = sizeof(te);
+        const DWORD self = GetCurrentThreadId();
+        const DWORD pid = GetCurrentProcessId();
+
+        struct Captured {
+            DWORD id;
+            HANDLE handle;
+            CONTEXT ctx;
+        };
+        std::vector<Captured> threads;
+        if (Thread32First(snap, &te)) {
+            do {
+                if (te.th32OwnerProcessID != pid || te.th32ThreadID == self) continue;
+                HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION,
+                                      FALSE, te.th32ThreadID);
+                if (!h) continue;
+                Captured c = {};
+                c.id = te.th32ThreadID;
+                c.handle = h;
+                c.ctx.ContextFlags = CONTEXT_FULL;
+                // Suspend only long enough to copy the registers. Walking the stack afterwards is safe because
+                // a hung thread's stack does not change, and it keeps us from deadlocking on a lock it holds.
+                if (SuspendThread(h) != static_cast<DWORD>(-1)) {
+                    const bool ok = GetThreadContext(h, &c.ctx) != 0;
+                    ResumeThread(h);
+                    if (ok) {
+                        threads.push_back(c);
+                        continue;
+                    }
+                }
+                CloseHandle(h);
+            } while (Thread32Next(snap, &te));
+        }
+        CloseHandle(snap);
+
+        int shown = 0;
+        for (auto& t : threads) {
+            std::string trace;
+            try {
+                trace = DebugExceptionHandler::GenerateStackTrace(&t.ctx, t.handle);
+            } catch (...) {}
+            // Only threads running game or Latite code are interesting; the rest are idle system waiters.
+            const bool interesting = trace.find("Minecraft") != std::string::npos ||
+                                     trace.find("Latite") != std::string::npos;
+            if (interesting) {
+                shown++;
+                std::ostringstream one;
+                one << "--- thread " << t.id << " ---\n";
+                std::istringstream lines(trace);
+                std::string line;
+                int count = 0;
+                while (std::getline(lines, line) && count < 40) {
+                    one << line << "\n";
+                    if (line.rfind("#", 0) == 0) count++;
+                }
+                AppendRawLog(one.str(), false);
+            }
+            CloseHandle(t.handle);
+        }
+        AppendRawLog("(" + std::to_string(shown) + " of " + std::to_string(threads.size()) +
+                         " threads run game or Latite code)\n" + std::string(crashReportWidth, '-') + "\n",
+                     false);
+    }
+
+    DWORD WINAPI HangWatchdogProc(LPVOID) {
+        uint64_t lastBeat = latiteHeartbeat.load();
+        DWORD stalled = 0;
+        int dumps = 0;
+        while (!watchdogStop.load()) {
+            Sleep(1000);
+            const uint64_t beat = latiteHeartbeat.load();
+            if (beat != lastBeat || beat == 0) {
+                lastBeat = beat;
+                stalled = 0;
+                dumps = 0;
+                continue;
+            }
+            stalled++;
+            if ((stalled == 4 || stalled == 8) && dumps < 2) {
+                dumps++;
+                try {
+                    DumpAllThreadStacks(dumps == 1 ? "first dump" : "second dump", stalled);
+                } catch (...) {}
+            }
+        }
+        return 0;
+    }
+}
+
+void DebugExceptionHandler::StartHangWatchdog() {
+    if (watchdogStarted.exchange(true)) return;
+    HANDLE h = CreateThread(nullptr, 0, HangWatchdogProc, nullptr, 0, nullptr);
+    if (h) CloseHandle(h);
 }
 
 void LogUnknownExceptionDetails(std::string_view reason) {

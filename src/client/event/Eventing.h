@@ -12,6 +12,7 @@
 #include <mutex>
 #include <type_traits>
 #include <unordered_map>
+#include "util/Trace.h"
 
 #ifdef LATITE_CRASH_REPORTING
 #include "util/ExceptionHandler.h"
@@ -25,6 +26,9 @@ namespace eventing_detail {
 
     inline void __cdecl guardedCallThunk(void* context) {
         auto* call = static_cast<GuardedCall*>(context);
+#ifdef LATITE_DEBUG
+        latiteTraceListener(*call->ev, call->fptr);
+#endif
         (call->listener->*call->fptr)(*call->ev);
     }
 }
