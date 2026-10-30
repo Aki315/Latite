@@ -15,6 +15,8 @@ namespace SDK {
         static inline size_t offInputHandler = 0x1E0;
         static inline size_t offGuiData = 0x650;
         static inline size_t offOptions = 0xE10;
+        // Where the LocalPlayer pointer sits in ClientInstance; -1 until found (see calibrateLocalPlayer).
+        static inline ptrdiff_t offLocalPlayer = -1;
 
         CLASS_FIELD_DYN(class MinecraftGame*, minecraftGame, offMinecraftGame);
         CLASS_FIELD_DYN(class Minecraft*, minecraft, offMinecraft);
@@ -24,6 +26,8 @@ namespace SDK {
         CLASS_FIELD(struct Vec2, cursorPos, 0x588);
 
         static ClientInstance* get();
+        // Called from a hook that receives the LocalPlayer, to find where ClientInstance keeps it. True once found.
+        static bool calibrateLocalPlayer(void* player);
         class BlockSource* getRegion();
         class LocalPlayer* getLocalPlayer();
         class GuiData* getGuiData();

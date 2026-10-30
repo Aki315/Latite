@@ -63,7 +63,9 @@ void SDK::ClientInstance::calibrate(ClientInstance* inst, MinecraftGame* game) {
         } else {
             Logger::Warn("[Offsets] ClientInstance.minecraftGame not found");
         }
-        rtti::logPointerMap("ClientInstance", inst, 0x100, 0x300);
+        rtti::logPointerMap("ClientInstance", inst, 0x100, 0x1000);
+        rtti::logVtable("ClientInstance", inst, 0, 0x50);
+        rtti::logVtable("MinecraftGame", game, 0, 0x50);
     }
 
     void* mc = nullptr;
@@ -74,17 +76,58 @@ void SDK::ClientInstance::calibrate(ClientInstance* inst, MinecraftGame* game) {
 
     if (calibrationAttempts >= 200) {
         calibrationDone = true;
-        rtti::logPointerMap("ClientInstance", inst, 0x100, 0x1000);
         rtti::logPointerMap("MinecraftGame", game, 0x800, 0x1600);
     }
 }
 
 SDK::BlockSource* SDK::ClientInstance::getRegion() {
-    return memory::callVirtual<BlockSource*>(this, 0x1E);
+    // The virtual function index (0x1E) is not known for 1.26.60, and calling the wrong slot is unsafe.
+    return nullptr;
 }
 
 SDK::LocalPlayer* SDK::ClientInstance::getLocalPlayer() {
-    return memory::callVirtual<LocalPlayer*>(this, 0x1F);
+    // The virtual function index (0x1F) is not known for 1.26.60. Until the pointer's field is found from a hook that
+    // receives the player, report "no player" instead of calling an unknown function.
+    if (offLocalPlayer < 0) return nullptr;
+    void* p = nullptr;
+    if (!rtti::readPtr(reinterpret_cast<char*>(this) + offLocalPlayer, &p) || !p) return nullptr;
+    // Only hand out something that looks like a live game object (starts with a vtable in the game image).
+    void* vt = nullptr;
+    if (!rtti::plausiblePtr(reinterpret_cast<uintptr_t>(p)) || !rtti::readPtr(p, &vt) ||
+        !rtti::inImage(reinterpret_cast<uintptr_t>(vt)))
+        return nullptr;
+    return static_cast<LocalPlayer*>(p);
+}
+
+bool SDK::ClientInstance::calibrateLocalPlayer(void* player) {
+    if (offLocalPlayer >= 0) return true;
+    if (!instance || !player) return false;
+    ptrdiff_t first = -1;
+    for (size_t off = 0; off < 0x1800; off += 8) {
+        void* p = nullptr;
+        if (!rtti::readPtr(reinterpret_cast<char*>(instance) + off, &p)) break;
+        if (p == player) {
+            Logger::Info("[Offsets] LocalPlayer 0x{:X} is stored in ClientInstance at +0x{:X}",
+                         reinterpret_cast<uintptr_t>(player), off);
+            if (first < 0) first = static_cast<ptrdiff_t>(off);
+        }
+    }
+    if (first < 0) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            Logger::Warn("[Offsets] LocalPlayer 0x{:X} was not found inside ClientInstance",
+                         reinterpret_cast<uintptr_t>(player));
+            rtti::logVtable("LocalPlayer", player, 0, 0x120);
+            rtti::logPointerMap("LocalPlayer", player, 0, 0x400);
+        }
+        return false;
+    }
+    offLocalPlayer = first;
+    Logger::Info("[Offsets] ClientInstance.localPlayer at +0x{:X}", first);
+    rtti::logVtable("LocalPlayer", player, 0, 0x120);
+    rtti::logPointerMap("LocalPlayer", player, 0, 0x400);
+    return true;
 }
 
 SDK::GuiData* SDK::ClientInstance::getGuiData() {

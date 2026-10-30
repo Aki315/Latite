@@ -3,6 +3,33 @@
 #include "util/Rtti.h"
 
 namespace rtti {
+    // Logs the code at the start of virtual function slots [first,last] of the object at obj: where each slot points
+    // (exe+RVA) and its first bytes. A game update moves virtual functions around; this shows what is in each slot.
+    inline void logVtable(const char* label, const void* obj, size_t first, size_t last) {
+        void* vt = nullptr;
+        if (!readPtr(obj, &vt) || !inImage(reinterpret_cast<uintptr_t>(vt))) {
+            Logger::Info("[Vtable] {}: no vtable in the game image", label);
+            return;
+        }
+        Logger::Info("[Vtable] {} vtable at exe+0x{:X}, slots 0x{:X}-0x{:X}:", label,
+                     reinterpret_cast<uintptr_t>(vt) - imageBase(), first, last);
+        for (size_t i = first; i <= last; i++) {
+            void* fn = nullptr;
+            if (!readPtr(reinterpret_cast<char*>(vt) + i * 8, &fn)) break;
+            const auto addr = reinterpret_cast<uintptr_t>(fn);
+            if (!inImage(addr)) {
+                Logger::Info("[Vtable] {} slot 0x{:X}: 0x{:X} (not in the game image)", label, i, addr);
+                continue;
+            }
+            uint8_t b[14] = {};
+            readBytes(fn, b, sizeof(b));
+            Logger::Info("[Vtable] {} slot 0x{:X}: exe+0x{:X}: {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} "
+                         "{:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
+                         label, i, addr - imageBase(), b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9],
+                         b[10], b[11], b[12], b[13]);
+        }
+    }
+
     // Logs every pointer-looking value in [start,end) of the object at base, with the first qword it points at
     // (a vtable for C++ objects, printed as exe+RVA) and the class name if RTTI knows it. Used to see where fields
     // moved after a game update.

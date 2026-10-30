@@ -216,6 +216,7 @@ int __fastcall GenericHooks::RakPeer_getAveragePing(void* obj, char* guidOrAddy)
 
 void __fastcall GenericHooks::LocalPlayer_applyTurnDelta(void* obj, Vec2& rot) {
     LATITE_TRACE_HOOK("GenericHooks::LocalPlayer_applyTurnDelta");
+    SDK::ClientInstance::calibrateLocalPlayer(obj);
     TurnDeltaEvent turnEvent { rot };
     Eventing::get().dispatch(turnEvent);
 
