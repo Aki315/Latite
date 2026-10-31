@@ -26,6 +26,8 @@ namespace SDK {
         // @dump-wbds Player::getName, 3
         CLASS_FIELD(std::string, playerName, 0xBC0); // xref: getName
         // @dump-wbds ServerPlayer::sendNetworkPacket, 18
-        CLASS_FIELD(PacketSender*, packetSender, 0x7F8); // xref: Player::Player a3
+        // Moved a lot in 1.26.60; the offset is found at runtime (see ClientInstance::discoverLocalPlayer).
+        static inline size_t offPacketSender = 0x7F8;
+        CLASS_FIELD_DYN(PacketSender*, packetSender, offPacketSender); // xref: Player::Player a3
     };
 }

@@ -4,6 +4,7 @@
 #include "Platform_GameCore.h"
 #include "MinecraftGame.h"
 #include "mc/common/world/Minecraft.h"
+#include "mc/common/world/actor/player/Player.h"
 #include "util/RttiLog.h"
 #include <cmath>
 #include <cstring>
@@ -15,6 +16,40 @@ namespace {
     SDK::MinecraftGame* calibrationGame = nullptr;
     bool calibrationDone = false;
     unsigned calibrationAttempts = 0;
+}
+
+namespace {
+    // The game's client map points at a base-class part of ClientInstance, not at the start of the object. That part
+    // has its own tiny virtual function table whose first entry is an adjustor thunk ("add rcx, -0x98; jmp ..."), which
+    // is how the real start of the object can be found.
+    void* rebaseToRealInstance(void* p) {
+        if (!p) return p;
+        void* vt = nullptr;
+        if (!rtti::readPtr(p, &vt) || !rtti::inImage(reinterpret_cast<uintptr_t>(vt))) return p;
+        void* fn = nullptr;
+        if (!rtti::readPtr(vt, &fn) || !rtti::inImage(reinterpret_cast<uintptr_t>(fn))) return p;
+        uint8_t b[8] = {};
+        if (!rtti::readBytes(fn, b, sizeof(b))) return p;
+        if (!(b[0] == 0x48 && b[1] == 0x81 && b[2] == 0xC1 && b[7] == 0xE9)) return p;
+        int32_t adj = 0;
+        std::memcpy(&adj, b + 3, 4);
+        if (adj >= 0 || adj < -0x1000) return p;
+        void* r = reinterpret_cast<char*>(p) + adj;
+        void* rvt = nullptr;
+        if (!rtti::readPtr(r, &rvt) || !rtti::inImage(reinterpret_cast<uintptr_t>(rvt)) || rvt == vt) return p;
+        size_t slots = 0;
+        for (; slots < 0x400; slots++) {
+            void* f = nullptr;
+            if (!rtti::readPtr(reinterpret_cast<char*>(rvt) + slots * 8, &f) ||
+                !rtti::inImage(reinterpret_cast<uintptr_t>(f)))
+                break;
+        }
+        Logger::Info("[Offsets] client map entry 0x{:X} is a base-class part; the real ClientInstance is at 0x{:X} "
+                     "({} bytes lower, vtable exe+0x{:X} with {} slots)",
+                     reinterpret_cast<uintptr_t>(p), reinterpret_cast<uintptr_t>(r), -adj,
+                     reinterpret_cast<uintptr_t>(rvt) - rtti::imageBase(), slots);
+        return slots >= 0x40 ? r : p;
+    }
 }
 
 SDK::ClientInstance* SDK::ClientInstance::get() {
@@ -29,7 +64,7 @@ SDK::ClientInstance* SDK::ClientInstance::get() {
             return nullptr;
         }
 
-        instance = mcgame->getPrimaryClientInstance();
+        instance = static_cast<ClientInstance*>(rebaseToRealInstance(mcgame->getPrimaryClientInstance()));
         calibrationGame = mcgame;
     }
     if (instance && !calibrationDone) {
@@ -66,8 +101,8 @@ void SDK::ClientInstance::calibrate(ClientInstance* inst, MinecraftGame* game) {
         } else {
             Logger::Warn("[Offsets] ClientInstance.minecraftGame not found");
         }
-        rtti::logPointerMap("ClientInstance", inst, 0x100, 0x1000);
-        rtti::logVtable("ClientInstance", inst, 0, 0x50);
+        rtti::logPointerMap("ClientInstance", inst, 0x100, 0x1400);
+        rtti::logVtable("ClientInstance", inst, 0, 0x60);
         rtti::logVtable("MinecraftGame", game, 0, 0x50);
     }
 
@@ -121,7 +156,7 @@ void SDK::ClientInstance::discoverLocalPlayer() {
         size_t vtableSlots;
     };
     std::vector<Candidate> found;
-    for (size_t off = 0x100; off < 0x1000; off += 8) {
+    for (size_t off = 0x100; off < 0x1400; off += 8) {
         void* p = nullptr;
         if (!rtti::readPtr(reinterpret_cast<char*>(instance) + off, &p) || !p) continue;
         if (!rtti::plausiblePtr(reinterpret_cast<uintptr_t>(p)) || p == packetSender) continue;
@@ -157,7 +192,9 @@ void SDK::ClientInstance::discoverLocalPlayer() {
     // A player/actor class has a long virtual function table; the other holders do not.
     if (best->vtableSlots >= 0x80) {
         offLocalPlayer = static_cast<ptrdiff_t>(best->field);
-        Logger::Info("[Offsets] ClientInstance.localPlayer taken from +0x{:X}", best->field);
+        Player::offPacketSender = best->holds;
+        Logger::Info("[Offsets] ClientInstance.localPlayer taken from +0x{:X}; Player.packetSender at +0x{:X}",
+                     best->field, best->holds);
         void* p = nullptr;
         rtti::readPtr(reinterpret_cast<char*>(instance) + best->field, &p);
         if (p) {
@@ -171,7 +208,7 @@ bool SDK::ClientInstance::calibrateLocalPlayer(void* player) {
     if (offLocalPlayer >= 0) return true;
     if (!instance || !player) return false;
     ptrdiff_t first = -1;
-    for (size_t off = 0; off < 0x1800; off += 8) {
+    for (size_t off = 0; off < 0x1800; off += 8) {  // (also used when a hook hands us the player)
         void* p = nullptr;
         if (!rtti::readPtr(reinterpret_cast<char*>(instance) + off, &p)) break;
         if (p == player) {

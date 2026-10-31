@@ -5,6 +5,7 @@
 #include <cstring>
 #include <mutex>
 #include <set>
+#include <type_traits>
 #include <typeinfo>
 #include <utility>
 #include "util/Logger.h"
@@ -28,6 +29,21 @@ inline bool latiteTraceListener(const Ev& ev, const Fn& fn) {
     }
     Logger::Info("[Trace] first call of listener {}", DebugExceptionHandler::DescribeAddress(raw[0]));
     return true;
+}
+
+// Runs f; in the debug build an access violation inside it is logged once and skipped instead of ending the game.
+template<typename F>
+inline void latiteGuarded(F&& f, const char* why) {
+#ifdef LATITE_CRASH_REPORTING
+    using Fn = std::remove_reference_t<F>;
+    DebugExceptionHandler::RunVoidWithSehGuard(
+        [](void* c) {
+            (*static_cast<Fn*>(c))();
+        },
+        &f, why);
+#else
+    f();
+#endif
 }
 
 // Debug breadcrumbs: the first call of each hook is written to latest.log. When the game dies without any error

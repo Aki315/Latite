@@ -39,17 +39,32 @@ void __fastcall ScreenViewHooks::setupAndRender(SDK::ScreenView* view, void* ctx
     Eventing::get().dispatch(ev);
     LATITE_TRACE_HOOK("setupAndRender: RenderLayerEvent dispatched");
 
-    if (view->visualTree->rootControl->name == "debug_screen") {
-        PluginManager::Event ev { L"render2d", {}, false };
-        Latite::getPluginManager().dispatchEvent(ev);
-    }
+    latiteGuarded(
+        [&] {
+            if (view->visualTree->rootControl->name == "debug_screen") {
+                PluginManager::Event ev { L"render2d", {}, false };
+                Latite::getPluginManager().dispatchEvent(ev);
+            }
+        },
+        "Caught SEH exception in setupAndRender (debug_screen check)");
 
     static bool hasInitPacketSender = false;
     if (!hasInitPacketSender) {
-        if (SDK::ClientInstance::get()->getLocalPlayer()) {
-            Latite::getHooks().get<PacketHooks>().initPacketSender(
-                SDK::ClientInstance::get()->getLocalPlayer()->packetSender);
-            hasInitPacketSender = true;
+        auto* lp = SDK::ClientInstance::get()->getLocalPlayer();
+        if (lp) {
+            hasInitPacketSender = true; // one attempt only: a failure here must not repeat every frame
+            latiteGuarded(
+                [&] {
+                    auto* sender = lp->packetSender;
+                    void* vt = nullptr;
+                    if (sender && rtti::readPtr(sender, &vt) && rtti::inImage(reinterpret_cast<uintptr_t>(vt))) {
+                        Latite::getHooks().get<PacketHooks>().initPacketSender(sender);
+                    } else {
+                        Logger::Warn("[Hook] Player.packetSender does not look like a PacketSender; sendToServer hook "
+                                     "skipped");
+                    }
+                },
+                "Caught SEH exception in initPacketSender");
         }
     }
 
