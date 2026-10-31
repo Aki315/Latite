@@ -56,6 +56,10 @@ bool TestCommand::execute(std::string const label, std::vector<std::string> args
 
     // if (args.size() < 1) return false;
 
+    if (!lp->supplies || !lp->supplies->inventory) {
+        message(L"Couldn't read the inventory (player layout not repaired for this version).", true);
+        return true;
+    }
     auto selec = lp->supplies->inventory->getItem(lp->supplies->selectedSlot);
 
     if (selec && selec->tag) {

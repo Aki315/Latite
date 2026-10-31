@@ -34,6 +34,7 @@ using nlohmann::json;
 
 #include <libhat.hpp>
 
+#include "util/EnttAssert.h"
 #include <entt/entt.hpp>
 
 // COM

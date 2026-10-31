@@ -7,11 +7,13 @@
 #include <atomic>
 #include "client/event/Eventing.h"
 #include "client/event/events/KeyUpdateEvent.h"
+#include "client/event/events/ClickEvent.h"
 #include "util/Logger.h"
 #include "util/Trace.h"
 
 namespace input_fallback {
     inline std::atomic<bool> mainHookSawKey { false };
+    inline std::atomic<bool> mainHookSawWheel { false };
     inline HHOOK hook = nullptr;
     inline HWND gameWindow = nullptr;
 
@@ -19,6 +21,17 @@ namespace input_fallback {
         if (code >= 0 && wParam == PM_REMOVE && lParam) {
             auto* m = reinterpret_cast<MSG*>(lParam);
             const bool sys = m->message == WM_SYSKEYDOWN || m->message == WM_SYSKEYUP;
+            if (m->message == WM_MOUSEWHEEL) {
+                // The game's own mouse input hook has not reported any wheel movement: scroll the menu from here.
+                LATITE_TRACE_HOOK("input fallback: first mouse wheel message");
+                if (!mainHookSawWheel.load()) {
+                    const int notches = GET_WHEEL_DELTA_WPARAM(m->wParam) / WHEEL_DELTA;
+                    if (notches != 0) {
+                        ClickEvent ev { 4, static_cast<char>(notches > 0 ? 120 : -120) };
+                        if (Eventing::get().dispatch(ev)) m->message = WM_NULL;
+                    }
+                }
+            }
             if (m->message == WM_KEYDOWN || m->message == WM_KEYUP || sys) {
                 LATITE_TRACE_HOOK("input fallback: first key message");
                 if (!mainHookSawKey.load()) {

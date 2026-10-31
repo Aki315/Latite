@@ -3,6 +3,10 @@
 #include "mc/common/entity/EntityContext.h"
 #include "mc/common/util/MolangVariableMap.h"
 #include <memory>
+#include <atomic>
+#include <typeinfo>
+#include "util/SafeCall.h"
+#include "util/Logger.h"
 
 #include "mc/common/entity/component/AABBShapeComponent.h"
 #include "mc/common/entity/component/ActorDataFlagComponent.h"
@@ -62,9 +66,22 @@ namespace SDK {
         bool isInvisible();
         class ItemStack* getArmor(int armorSlot);
 
+        // After a game update the registry layout can be wrong; a failed lookup returns nullptr, and after a few
+        // failures component lookups are switched off instead of crashing the game.
         template<typename T>
         T* tryGetComponent() {
-            return entityContext.enttRegistry.try_get<T>(entityContext.entity);
+            static std::atomic<int> failures { 0 };
+            if (failures.load() >= 3) return nullptr;
+            T* out = nullptr;
+            if (!latite_safe::run([&] { out = entityContext.enttRegistry.try_get<T>(entityContext.entity); })) {
+                if (++failures >= 3) {
+                    Logger::Warn("[Entity] component lookup for {} keeps failing (EntityContext layout changed?); "
+                                 "switched off",
+                                 typeid(T).name());
+                }
+                return nullptr;
+            }
+            return out;
         }
     };
 }

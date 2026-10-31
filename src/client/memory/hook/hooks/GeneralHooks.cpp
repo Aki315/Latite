@@ -167,6 +167,7 @@ LRESULT GenericHooks::MainWindow__windowProcCallback(HWND hwnd, UINT msg, WPARAM
 }
 
 bool GenericHooks::GameCore_handleMouseInput(void* a1, void* a2, void* a3) { // Made up name
+    LATITE_TRACE_HOOK("GenericHooks::GameCore_handleMouseInput");
     const auto res = GameCore_handleMouseInputHook->oFunc<decltype(&GameCore_handleMouseInput)>()(a1, a2, a3);
 
     const auto mouse = SDK::MouseDevice::get();
@@ -177,6 +178,7 @@ bool GenericHooks::GameCore_handleMouseInput(void* a1, void* a2, void* a3) { // 
 
         const auto button = start.action;
         const auto state = start.data;
+        if (button == 4) input_fallback::mainHookSawWheel = true;
 
         if (button > 0) {
             Vec2& mousePos = SDK::ClientInstance::get()->cursorPos;
