@@ -2,6 +2,7 @@
 #include "MinecraftGame.h"
 #include "mc/Addresses.h"
 #include "util/Rtti.h"
+#include "util/WinCursor.h"
 
 namespace {
     struct ClientInterface {
@@ -33,7 +34,17 @@ bool SDK::MinecraftGame::calibrate(MinecraftGame* game) {
 }
 
 bool SDK::MinecraftGame::isCursorGrabbed() {
-    return hat::member_at<bool>(this, 0x1E8);
+    // The old field (+0x1E8) is stale in 1.26.60; the pointer is hidden exactly while the game owns the mouse.
+    const bool grabbed = wincursor::pointerHidden();
+#ifdef LATITE_DEBUG
+    static int last = -1;
+    if (last != static_cast<int>(grabbed)) {
+        last = grabbed;
+        Logger::Info("[Cursor] mouse {} (pointer {}; old field at +0x1E8 = {})", grabbed ? "grabbed by the game" : "free",
+                     grabbed ? "hidden" : "shown", hat::member_at<bool>(this, 0x1E8));
+    }
+#endif
+    return grabbed;
 }
 
 SDK::FontRepository* SDK::MinecraftGame::getFontRepository() {

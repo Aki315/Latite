@@ -23,7 +23,9 @@ namespace SDK {
         CLASS_FIELD_DYN(class LevelRenderer*, levelRenderer, offLevelRenderer);
         CLASS_FIELD_DYN(class PacketSender*, packetSender, offPacketSender);
         CLASS_FIELD_DYN(class ClientInputHandler*, inputHandler, offInputHandler);
-        CLASS_FIELD(struct Vec2, cursorPos, 0x588);
+        // Pointer position in window pixels. Read from Windows: the game's own copy moved in 1.26.60.
+        __declspec(property(get = __get_cursorPos)) struct Vec2 cursorPos;
+        struct Vec2& __get_cursorPos();
 
         static ClientInstance* get();
         // Called from a hook that receives the LocalPlayer, to find where ClientInstance keeps it. True once found.

@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "util/WinCursor.h"
 #include "ClientInstance.h"
 
 #include "Platform_GameCore.h"
@@ -307,4 +308,19 @@ void SDK::ClientInstance::grabCursor() {
 // 48 8b 80 ? ? ? ? 48 8b ce ff 15 ? ? ? ? 84 db
 void SDK::ClientInstance::releaseCursor() {
     reinterpret_cast<void(__fastcall*)(void*)>(Signatures::ClientInstance_releaseCursor.result)(this);
+}
+
+Vec2& SDK::ClientInstance::__get_cursorPos() {
+    static Vec2 pos {};
+    float x = 0.f, y = 0.f, cw = 0.f, ch = 0.f;
+    if (wincursor::clientPos(x, y, &cw, &ch)) {
+        // The renderer's size can differ from the window's client size (DPI scaling): match the renderer.
+        auto ss = Latite::getRenderer().getScreenSize();
+        if (cw > 0.f && ch > 0.f && ss.width > 0.f && ss.height > 0.f) {
+            x *= ss.width / cw;
+            y *= ss.height / ch;
+        }
+        pos = { x, y };
+    }
+    return pos;
 }

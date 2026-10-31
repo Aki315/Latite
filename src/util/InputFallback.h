@@ -10,10 +10,12 @@
 #include "client/event/events/ClickEvent.h"
 #include "util/Logger.h"
 #include "util/Trace.h"
+#include "util/WinCursor.h"
 
 namespace input_fallback {
     inline std::atomic<bool> mainHookSawKey { false };
     inline std::atomic<bool> mainHookSawWheel { false };
+    inline std::atomic<bool> mainHookSawButton { false };
     inline HHOOK hook = nullptr;
     inline HWND gameWindow = nullptr;
 
@@ -42,6 +44,27 @@ namespace input_fallback {
             }
         }
         return CallNextHookEx(hook, code, wParam, lParam);
+    }
+
+    // Mouse buttons, read from Windows once per game tick. Only used while the game's own mouse hook has not
+    // reported a single button press (it does not fire on 1.26.60).
+    inline void pollButtons() {
+        static bool prev[3] = {};
+        static const int vk[3] = { VK_LBUTTON, VK_RBUTTON, VK_MBUTTON };
+        if (mainHookSawButton.load()) return;
+        HWND w = wincursor::gameWindow();
+        if (!w || GetForegroundWindow() != w) {
+            for (auto& p : prev) p = false;
+            return;
+        }
+        for (int i = 0; i < 3; i++) {
+            const bool down = (GetAsyncKeyState(vk[i]) & 0x8000) != 0;
+            if (down == prev[i]) continue;
+            prev[i] = down;
+            LATITE_TRACE_HOOK("input fallback: first mouse button change");
+            ClickEvent ev { i + 1, static_cast<char>(down ? 1 : 0) };
+            Eventing::get().dispatch(ev);
+        }
     }
 
     inline BOOL CALLBACK findWindowProc(HWND h, LPARAM param) {

@@ -179,6 +179,7 @@ bool GenericHooks::GameCore_handleMouseInput(void* a1, void* a2, void* a3) { // 
         const auto button = start.action;
         const auto state = start.data;
         if (button == 4) input_fallback::mainHookSawWheel = true;
+        else if (button > 0) input_fallback::mainHookSawButton = true;
 
         if (button > 0) {
             Vec2& mousePos = SDK::ClientInstance::get()->cursorPos;

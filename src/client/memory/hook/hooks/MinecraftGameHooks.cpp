@@ -5,6 +5,7 @@
 #include "client/event/Eventing.h"
 #include "client/script/PluginManager.h"
 #include "client/Latite.h"
+#include "util/InputFallback.h"
 
 namespace {
     std::shared_ptr<Hook> onDeviceLostHook;
@@ -21,6 +22,7 @@ namespace {
         }
 
         Eventing::get().dispatch(ev);
+        input_fallback::pollButtons();
         END_ERROR_HANDLER
     }
 
