@@ -142,6 +142,7 @@ public:
         , font(font)
         , guiScale(SDK::ClientInstance::get()->getGuiData()->guiScaleFrac) {}
     void flush(bool text = true, bool mesh = true) override;
+    bool meshOk();
 
     void drawVignette(d2d::Color const& innerCol, float fade = 0.f);
     void drawImage(SDK::TexturePtr& texture, Vec2 const& pos, Vec2 const& size, d2d::Color const& flushCol);

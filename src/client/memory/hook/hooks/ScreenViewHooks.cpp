@@ -32,6 +32,28 @@ void __fastcall ScreenViewHooks::setupAndRender(SDK::ScreenView* view, void* ctx
             rtti::logVtable("UIRenderContext", ctx, 0, 0x30);
             rtti::logPointerMap("ScreenView", view, 0, 0x100);
             rtti::logPointerMap("UIRenderContext", ctx, 0, 0x40);
+            // Code and layout dumps so the broken game-side drawing calls can be repaired from the log.
+            rtti::logQwords("UIRenderContext", ctx, 0, 0x60);
+            void* scn = nullptr;
+            rtti::readPtr(reinterpret_cast<char*>(ctx) + 0x10, &scn);
+            Logger::Info("[UI] ScreenContext (ctx+0x10) = 0x{:X}", reinterpret_cast<uintptr_t>(scn));
+            if (scn) {
+                rtti::logQwords("ScreenContext", scn, 0, 0x100);
+                rtti::logPointerMap("ScreenContext", scn, 0, 0x100);
+            }
+            void* vt = nullptr;
+            if (rtti::readPtr(ctx, &vt) && vt) {
+                for (size_t slot : { 5, 6, 7 }) {
+                    void* fn = nullptr;
+                    if (rtti::readPtr(reinterpret_cast<char*>(vt) + slot * 8, &fn)) {
+                        rtti::logCode(std::format("UIRenderContext.slot{}", slot).c_str(), fn, 0x1C0);
+                    }
+                }
+            }
+            rtti::logCode("Tessellator::begin", reinterpret_cast<void*>(Signatures::Tessellator_begin.result), 0x200);
+            rtti::logCode("Tessellator::vertex", reinterpret_cast<void*>(Signatures::Tessellator_vertex.result), 0x120);
+            rtti::logCode("MeshHelpers::renderMeshImmediately",
+                          reinterpret_cast<void*>(Signatures::MeshHelpers_renderMeshImmediately.result), 0x100);
         }
     }
 #endif

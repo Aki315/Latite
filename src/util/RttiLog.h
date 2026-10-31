@@ -30,6 +30,38 @@ namespace rtti {
         }
     }
 
+    // Logs `size` bytes of code/data at addr as 32-byte hex lines ("[Code] label exe+0xRVA: ..."), so a function that
+    // stopped working after a game update can be read back from latest.log and disassembled.
+    inline void logCode(const char* label, const void* addr, size_t size) {
+        const auto a = reinterpret_cast<uintptr_t>(addr);
+        if (!addr || !inImage(a)) {
+            Logger::Info("[Code] {}: 0x{:X} is not in the game image", label, a);
+            return;
+        }
+        Logger::Info("[Code] {} exe+0x{:X} ({} bytes):", label, a - imageBase(), size);
+        for (size_t off = 0; off < size; off += 32) {
+            uint8_t b[32] = {};
+            const size_t n = size - off < 32 ? size - off : 32;
+            if (!readBytes(reinterpret_cast<const char*>(addr) + off, b, n)) break;
+            std::string hex;
+            for (size_t i = 0; i < n; i++) hex += std::format("{:02X} ", b[i]);
+            Logger::Info("[Code] {} +0x{:X}: {}", label, off, hex);
+        }
+    }
+
+    // Logs the raw 8-byte values in [start,end) of the object at base (pointers, flags and numbers alike).
+    inline void logQwords(const char* label, const void* base, size_t start, size_t end) {
+        Logger::Info("[Raw] {} raw qwords 0x{:X}-0x{:X}:", label, start, end);
+        for (size_t off = start; off < end; off += 8) {
+            void* p = nullptr;
+            if (!readPtr(reinterpret_cast<const char*>(base) + off, &p)) {
+                Logger::Info("[Raw]   {}+0x{:X}: <unreadable>", label, off);
+                break;
+            }
+            Logger::Info("[Raw]   {}+0x{:X}: 0x{:016X}", label, off, reinterpret_cast<uintptr_t>(p));
+        }
+    }
+
     // Logs every pointer-looking value in [start,end) of the object at base, with the first qword it points at
     // (a vtable for C++ objects, printed as exe+RVA) and the class name if RTTI knows it. Used to see where fields
     // moved after a game update.

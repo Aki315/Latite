@@ -3,6 +3,8 @@
 #include "client/Latite.h"
 #include "Util.h"
 #include "mc/common/client/renderer/Tessellator.h"
+#include "mc/common/client/renderer/UiDrawGate.h"
+#include "util/SafeCall.h"
 #include "mc/common/client/renderer/MeshUtils.h"
 #include "mc/common/client/renderer/MaterialPtr.h"
 #include "mc/common/client/renderer/ActorRenderDispatcher.h"
@@ -379,12 +381,17 @@ SDK::RectangleArea MCDrawUtil::getRect(d2d::Rect const& rc) {
     return SDK::RectangleArea(rc.left * guiScale, rc.top * guiScale, rc.right * guiScale, rc.bottom * guiScale);
 }
 
+bool MCDrawUtil::meshOk() {
+    return scn && SDK::uidraw::meshReady() && scn->tess;
+}
+
 void MCDrawUtil::flush(bool text, bool mesh) {
-    if (mesh) SDK::MeshHelpers::renderMeshImmediately(scn, scn->tess, SDK::MaterialPtr::getUIColor());
+    if (mesh && meshOk()) SDK::MeshHelpers::renderMeshImmediately(scn, scn->tess, SDK::MaterialPtr::getUIColor());
     if (text) renderCtx->flushText(0.f);
 }
 
 void MCDrawUtil::drawVignette(d2d::Color const& innerCol, float fade) {
+    if (!meshOk()) return;
     // jay you should totally make the fade float actually fade in the vignette
     auto tess = scn->tess;
     *scn->shaderColor = innerCol;
@@ -433,6 +440,7 @@ void MCDrawUtil::drawVignette(d2d::Color const& innerCol, float fade) {
 }
 
 void MCDrawUtil::drawImage(SDK::TexturePtr& texture, Vec2 const& pos, Vec2 const& size, d2d::Color const& flushCol) {
+    if (SDK::uidraw::imageBroken.load()) return;
     this->renderCtx->drawImage(texture, { pos.x * this->guiScale, pos.y * guiScale },
                                { size.x * guiScale, size.y * guiScale }, { 0.f, 0.f }, { 1.f, 1.f });
     this->renderCtx->flushImages(flushCol, 1.f, SDK::HashedString("ui_textured_and_glcolor_sprite"));
@@ -440,12 +448,16 @@ void MCDrawUtil::drawImage(SDK::TexturePtr& texture, Vec2 const& pos, Vec2 const
 
 void MCDrawUtil::drawImage(SDK::TexturePtr& texture, Vec2 const& pos, Vec2 const& size, Vec2 const& uvPos,
                            Vec2 const& uvSize, d2d::Color const& flushCol) {
+    if (SDK::uidraw::imageBroken.load()) return;
     this->renderCtx->drawImage(texture, { pos.x * this->guiScale, pos.y * guiScale },
                                { size.x * guiScale, size.y * guiScale }, uvPos, uvSize);
     this->renderCtx->flushImages(flushCol, 1.f, SDK::HashedString("ui_textured_and_glcolor_sprite"));
 }
 
 d2d::Rect MCDrawUtil::drawItem(SDK::ItemStack* item, Vec2 const& pos, float sizeModifier, float opacity) {
+    if (!Signatures::BaseActorRenderContext_BaseActorRenderContext.result) {
+        return { pos.x, pos.y, pos.x + (16.f * sizeModifier) / guiScale, pos.y + (16.f * sizeModifier) / guiScale };
+    }
     SDK::BaseActorRenderContext ctx =
         SDK::BaseActorRenderContext { this->renderCtx->screenContext, this->renderCtx->cinst,
                                       this->renderCtx->cinst->minecraftGame };
@@ -645,6 +657,7 @@ bool MCDrawUtil::drawActor(SDK::Actor* actor, d2d::Rect const& bounds, float opa
 }
 
 void MCDrawUtil::fillPolygon(Vec2 const& center, float radius, int numSides, d2d::Color const& col) {
+    if (!meshOk()) return;
     auto tess = scn->tess;
     *scn->shaderColor = { 1.f, 1.f, 1.f, 1.f };
     tess->color(col);
@@ -673,6 +686,7 @@ void MCDrawUtil::drawPolygon(Vec2 const& center, float radius, int numSides, d2d
 }
 
 void MCDrawUtil::fillRectangle(RectF const& rc, d2d::Color const& color) {
+    if (!meshOk()) return;
     auto rect = getRect(rc);
     auto tess = scn->tess;
     tess->begin(SDK::Primitive::Quad, 4);
@@ -688,6 +702,7 @@ void MCDrawUtil::fillRectangle(RectF const& rc, d2d::Color const& color) {
 }
 
 void MCDrawUtil::drawRectangle(RectF const& rect, d2d::Color const& col, float lineThickness) {
+    if (!meshOk()) return;
     bool oImm = immediate;
     immediate = false;
 
@@ -712,6 +727,7 @@ void MCDrawUtil::drawRectangle(RectF const& rect, d2d::Color const& col, float l
 }
 
 void MCDrawUtil::fillRoundedRectangle(RectF const& rc, d2d::Color const& col, float radius) {
+    if (!meshOk()) return;
     auto rect = d2d::Rect(rc.left * guiScale, rc.top * guiScale, rc.right * guiScale, rc.bottom * guiScale);
     radius *= guiScale;
     int numSides = 20;
@@ -747,6 +763,7 @@ void MCDrawUtil::fillRoundedRectangle(RectF const& rc, d2d::Color const& col, fl
 
 void MCDrawUtil::drawRoundedRectangle(RectF rect, d2d::Color const& color, float radius, float lineThickness,
                                       OutlinePosition outPos) {
+    if (!meshOk()) return;
     lineThickness *= guiScale;
 
     rect = d2d::Rect(rect.left * guiScale, rect.top * guiScale, rect.right * guiScale, rect.bottom * guiScale);
@@ -788,15 +805,21 @@ void MCDrawUtil::drawRoundedRectangle(RectF rect, d2d::Color const& color, float
 void MCDrawUtil::drawText(RectF const& rc, std::wstring const& text, d2d::Color const& color,
                           Renderer::FontSelection font, float size, DWRITE_TEXT_ALIGNMENT alignment,
                           DWRITE_PARAGRAPH_ALIGNMENT verticalAlign, bool cache, bool hyphen) {
+    if (SDK::uidraw::textDrawBroken.load() || !this->font) return;
+    float lineH = 0.f;
+    if (!latite_safe::run([&] { lineH = this->font->getLineHeight(); }) || !(lineH > 0.f)) {
+        SDK::uidraw::textDrawBroken = true;
+        Logger::Warn("[UI] Font::getLineHeight (vtable slot 7) gave {} or crashed; game-side text is off", lineH);
+        return;
+    }
     SDK::CaretMeasureData caretMeasure {};
 
     float newTop = rc.top;
-    float vSize = (size * guiScale) / (this->font->getLineHeight());
     float height = size * (countof(text, L'\n') + 1);
 
     switch (verticalAlign) {
     case DWRITE_PARAGRAPH_ALIGNMENT_CENTER:
-        newTop = rc.centerY(height * (10.f / this->font->getLineHeight()));
+        newTop = rc.centerY(height * (10.f / lineH));
         break;
     case DWRITE_PARAGRAPH_ALIGNMENT_FAR:
         newTop = rc.bottom - (height);
@@ -807,11 +830,16 @@ void MCDrawUtil::drawText(RectF const& rc, std::wstring const& text, d2d::Color 
 
     RectF rMod = rc;
     rMod.top = newTop;
-    renderCtx->drawText(this->font, getRect(rMod), util::WStrToStr(text), color, color.a,
-                        (SDK::ui::TextAlignment)alignment,
-                        SDK::TextMeasureData((size * guiScale) / this->font->getLineHeight(),
-                                             Latite::get().shouldRenderTextShadows(), false),
-                        caretMeasure);
+    if (!latite_safe::run([&] {
+            renderCtx->drawText(this->font, getRect(rMod), util::WStrToStr(text), color, color.a,
+                                (SDK::ui::TextAlignment)alignment,
+                                SDK::TextMeasureData((size * guiScale) / lineH,
+                                                     Latite::get().shouldRenderTextShadows(), false),
+                                caretMeasure);
+        })) {
+        SDK::uidraw::textDrawBroken = true;
+        Logger::Warn("[UI] MinecraftUIRenderContext::drawText (vtable slot 5) crashed; game-side text is off");
+    }
 #ifdef LATITE_DEBUG
     if (Latite::get().shouldRenderDebugTextRects()) {
         Vec2 measured = getTextSize(text, font, size, true, false);
@@ -827,12 +855,20 @@ Vec2 MCDrawUtil::getTextSize(std::wstring const& text, Renderer::FontSelection f
     float totalHeight = (countof(text, '\n') + 1) * singleLineHeight;
 
     float longest = 0.f;
+    if (SDK::uidraw::textDrawBroken.load()) return { 0.f, totalHeight };
 
     for (auto line : text | std::views::split(L'\n')) {
         std::wstring wline(line.begin(), line.end());
-        auto sz =
-            this->font->getLineLength(util::WStrToStr(wline), (size * guiScale) / this->font->getLineHeight(), false) /
-            guiScale;
+        float sz = 0.f;
+        if (!latite_safe::run([&] {
+                sz = this->font->getLineLength(util::WStrToStr(wline),
+                                               (size * guiScale) / this->font->getLineHeight(), false) /
+                     guiScale;
+            })) {
+            SDK::uidraw::textDrawBroken = true;
+            Logger::Warn("[UI] Font::getLineLength/getLineHeight crashed; game-side text is off");
+            break;
+        }
         if (sz > longest) {
             longest = sz;
         }
