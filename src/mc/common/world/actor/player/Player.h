@@ -4,6 +4,7 @@
 #include "PlayerInventory.h"
 #include "mc/common/network/PacketSender.h"
 #include "GameMode.h"
+#include "mc/common/client/game/ClientInstance.h"
 #include "SerializedSkinRef.h"
 #include <string>
 
@@ -28,6 +29,12 @@ namespace SDK {
         // @dump-wbds ServerPlayer::sendNetworkPacket, 18
         // Moved a lot in 1.26.60; the offset is found at runtime (see ClientInstance::discoverLocalPlayer).
         static inline size_t offPacketSender = 0x7F8;
-        CLASS_FIELD_DYN(PacketSender*, packetSender, offPacketSender); // xref: Player::Player a3
+        // The PacketSender lives in ClientInstance in 1.26.60, not in the player any more.
+        __declspec(property(get = __get_packetSender)) PacketSender* packetSender;
+        PacketSender*& __get_packetSender() {
+            static PacketSender* sender = nullptr;
+            sender = ClientInstance::get()->packetSender;
+            return sender;
+        }
     };
 }

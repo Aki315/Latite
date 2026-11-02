@@ -50,6 +50,21 @@ namespace rawregistry {
         return 0;
     }
 
+    // Calls fn(typeHash) for every component storage the registry has (at most `limit` of them).
+    template<typename Fn>
+    inline void forEachStorageHash(uintptr_t registry, Fn&& fn, size_t limit = 4096) {
+        uintptr_t nodes = 0, nodesEnd = 0;
+        if (!plausible(registry) || !rd(registry + 0x68, nodes) || !rd(registry + 0x70, nodesEnd) || !plausible(nodes) ||
+            nodesEnd <= nodes)
+            return;
+        size_t n = 0;
+        for (uintptr_t node = nodes; node + 0x20 <= nodesEnd && n < limit; node += 0x20, ++n) {
+            uint32_t key = 0;
+            if (!rd(node + 8, key)) return;
+            fn(key);
+        }
+    }
+
     // Address of the component with the given type hash and size for the entity, or 0 if it has none.
     inline uintptr_t findComponent(uintptr_t registry, uint32_t entity, uint32_t hash, size_t size) {
         const uintptr_t storage = findStorage(registry, hash);

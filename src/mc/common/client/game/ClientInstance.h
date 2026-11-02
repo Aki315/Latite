@@ -17,6 +17,8 @@ namespace SDK {
         static inline size_t offOptions = 0xE10;
         // Where the LocalPlayer pointer sits in ClientInstance; -1 until found (see calibrateLocalPlayer).
         static inline ptrdiff_t offLocalPlayer = -1;
+        // WeakEntityRef { EntityRegistry*, control block, entity id } of the local player (1.26.60).
+        static inline size_t offLocalPlayerRef = 0x268;
 
         CLASS_FIELD_DYN(class MinecraftGame*, minecraftGame, offMinecraftGame);
         CLASS_FIELD_DYN(class Minecraft*, minecraft, offMinecraft);

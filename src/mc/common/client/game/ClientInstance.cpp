@@ -1,5 +1,7 @@
 #include "pch.h"
 #include "util/WinCursor.h"
+#include "util/SafeCall.h"
+#include "mc/common/entity/RawRegistry.h"
 #include "ClientInstance.h"
 
 #include "Platform_GameCore.h"
@@ -126,22 +128,53 @@ SDK::BlockSource* SDK::ClientInstance::getRegion() {
 }
 
 SDK::LocalPlayer* SDK::ClientInstance::getLocalPlayer() {
-    // ClientInstance has no virtual function table of its own in 1.26.60 (it used to have getLocalPlayer in slot
-    // 0x1F). The player's field is found by looking for the object that holds the game's PacketSender pointer, or from
-    // a hook that receives the player. Until then, report "no player".
-    if (offLocalPlayer < 0) {
-        static unsigned calls = 0;
-        if (++calls % 300 == 1) discoverLocalPlayer();
-        if (offLocalPlayer < 0) return nullptr;
-    }
-    void* p = nullptr;
-    if (!rtti::readPtr(reinterpret_cast<char*>(this) + offLocalPlayer, &p) || !p) return nullptr;
-    // Only hand out something that looks like a live game object (starts with a vtable in the game image).
-    void* vt = nullptr;
-    if (!rtti::plausiblePtr(reinterpret_cast<uintptr_t>(p)) || !rtti::readPtr(p, &vt) ||
-        !rtti::inImage(reinterpret_cast<uintptr_t>(vt)))
-        return nullptr;
-    return static_cast<LocalPlayer*>(p);
+    // ClientInstance keeps the local player as a WeakEntityRef { EntityRegistry*, control block, entity id }; the Actor
+    // itself is the "actor owner" component of that entity (layout read from a client that works on 1.26.60).
+    // The owner component's type hash is not known in advance: it is the storage whose component for this entity
+    // points at an object that starts with a vtable and carries the same registry and entity id at +0x10/+0x18.
+    static uint32_t ownerHash = 0;
+    static unsigned misses = 0;
+    uintptr_t result = 0;
+    latite_safe::run([&] {
+        struct Ref {
+            uintptr_t registry, control;
+            uint32_t entity;
+        } ref {};
+        if (!rawregistry::rd(reinterpret_cast<uintptr_t>(this) + offLocalPlayerRef, ref) ||
+            !rawregistry::plausible(ref.registry) || !rawregistry::plausible(ref.control) ||
+            (ref.entity & 0x3FFFFu) == 0x3FFFFu)
+            return;
+        const uintptr_t registry = ref.registry + 0x30;
+        auto tryHash = [&](uint32_t hash) -> uintptr_t {
+            const uintptr_t comp = rawregistry::findComponent(registry, ref.entity, hash, 8);
+            uintptr_t actor = 0, vt = 0;
+            if (!comp || !rawregistry::rd(comp, actor) || !rawregistry::plausible(actor) ||
+                !rawregistry::rd(actor, vt) || !rtti::inImage(vt))
+                return 0;
+            struct Head {
+                uintptr_t registry;
+                uint32_t entity;
+            } head {};
+            if (!rawregistry::rd(actor + 0x10, head) || head.registry != registry || head.entity != ref.entity) return 0;
+            return actor;
+        };
+        if (ownerHash) {
+            result = tryHash(ownerHash);
+            if (result) return;
+        }
+        if (misses++ % 120 != 0) return; // the full scan reads a few thousand words; do it now and then
+        rawregistry::forEachStorageHash(registry, [&](uint32_t hash) {
+            if (result) return;
+            if (const uintptr_t actor = tryHash(hash)) {
+                result = actor;
+                ownerHash = hash;
+                Logger::Info("[Offsets] local player found through the entity registry (owner component hash 0x{:X}), "
+                             "Player at 0x{:X}",
+                             hash, actor);
+            }
+        });
+    });
+    return reinterpret_cast<LocalPlayer*>(result);
 }
 
 void SDK::ClientInstance::discoverLocalPlayer() {
@@ -206,33 +239,16 @@ void SDK::ClientInstance::discoverLocalPlayer() {
 }
 
 bool SDK::ClientInstance::calibrateLocalPlayer(void* player) {
-    if (offLocalPlayer >= 0) return true;
-    if (!instance || !player) return false;
-    ptrdiff_t first = -1;
-    for (size_t off = 0; off < 0x1800; off += 8) {  // (also used when a hook hands us the player)
-        void* p = nullptr;
-        if (!rtti::readPtr(reinterpret_cast<char*>(instance) + off, &p)) break;
-        if (p == player) {
-            Logger::Info("[Offsets] LocalPlayer 0x{:X} is stored in ClientInstance at +0x{:X}",
-                         reinterpret_cast<uintptr_t>(player), off);
-            if (first < 0) first = static_cast<ptrdiff_t>(off);
-        }
-    }
-    if (first < 0) {
-        static bool warned = false;
-        if (!warned) {
-            warned = true;
-            Logger::Warn("[Offsets] LocalPlayer 0x{:X} was not found inside ClientInstance",
-                         reinterpret_cast<uintptr_t>(player));
-            rtti::logVtable("LocalPlayer", player, 0, 0x120);
-            rtti::logPointerMap("LocalPlayer", player, 0, 0x400);
-        }
-        return false;
-    }
-    offLocalPlayer = first;
-    Logger::Info("[Offsets] ClientInstance.localPlayer at +0x{:X}", first);
+    // The player is found through the entity registry (see getLocalPlayer). A hook that receives the player is a
+    // free cross-check of that result; log it once.
+    static bool logged = false;
+    if (logged || !instance || !player) return true;
+    logged = true;
+    const auto* found = instance->getLocalPlayer();
+    Logger::Info("[Offsets] hook received player 0x{:X}; the registry lookup gives 0x{:X} ({})",
+                 reinterpret_cast<uintptr_t>(player), reinterpret_cast<uintptr_t>(found),
+                 found == player ? "they agree" : "MISMATCH");
     rtti::logVtable("LocalPlayer", player, 0, 0x120);
-    rtti::logPointerMap("LocalPlayer", player, 0, 0x400);
     return true;
 }
 
