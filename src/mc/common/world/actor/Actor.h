@@ -6,6 +6,8 @@
 #include <atomic>
 #include <typeinfo>
 #include "util/SafeCall.h"
+#include "mc/common/entity/RawRegistry.h"
+#include <cstring>
 #include "util/Logger.h"
 
 #include "mc/common/entity/component/AABBShapeComponent.h"
@@ -23,11 +25,11 @@ namespace SDK {
         CLASS_FIELD(int32_t, invulnerableTime, 0x19C); // Mob::hurtEffects
         // @dump-wbds Actor::getDimensionConst, 9, -8
         CLASS_FIELD(std::shared_ptr<class Dimension>, dimension, 0x1C8);
-        CLASS_FIELD(StateVectorComponent*, stateVector, 0x218);
-        CLASS_FIELD(AABBShapeComponent*, aabbShape, 0x220);
-        CLASS_FIELD(ActorRotationComponent*, actorRotation, 0x228);
+        CLASS_FIELD(StateVectorComponent*, stateVector, 0x240); // +0x28 in 1.26.60
+        CLASS_FIELD(AABBShapeComponent*, aabbShape, 0x248);
+        CLASS_FIELD(ActorRotationComponent*, actorRotation, 0x250);
         // @dump-wbds Actor::getMolangVariables, 3
-        CLASS_FIELD(MolangVariableMap, molangVariableMap, 0x370);
+        CLASS_FIELD(MolangVariableMap, molangVariableMap, 0x398);
 
         ActorDataFlagComponent* getActorDataFlagsComponent();
 
@@ -66,22 +68,18 @@ namespace SDK {
         bool isInvisible();
         class ItemStack* getArmor(int armorSlot);
 
-        // After a game update the registry layout can be wrong; a failed lookup returns nullptr, and after a few
-        // failures component lookups are switched off instead of crashing the game.
+        // Walks the registry in memory (see RawRegistry.h) instead of using entt, whose container layout does not
+        // match the game's build. A crash while reading returns nullptr.
         template<typename T>
         T* tryGetComponent() {
-            static std::atomic<int> failures { 0 };
-            if (failures.load() >= 3) return nullptr;
-            T* out = nullptr;
-            if (!latite_safe::run([&] { out = entityContext.enttRegistry.try_get<T>(entityContext.entity); })) {
-                if (++failures >= 3) {
-                    Logger::Warn("[Entity] component lookup for {} keeps failing (EntityContext layout changed?); "
-                                 "switched off",
-                                 typeid(T).name());
-                }
+            uintptr_t found = 0;
+            const uintptr_t registry = reinterpret_cast<uintptr_t>(&entityContext.enttRegistry);
+            uint32_t entity = 0;
+            std::memcpy(&entity, &entityContext.entity, sizeof(entity));
+            if (!latite_safe::run([&] { found = rawregistry::findComponent(registry, entity, T::type_hash, sizeof(T)); })) {
                 return nullptr;
             }
-            return out;
+            return reinterpret_cast<T*>(found);
         }
     };
 }

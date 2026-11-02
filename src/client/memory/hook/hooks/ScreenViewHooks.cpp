@@ -75,6 +75,30 @@ void __fastcall ScreenViewHooks::setupAndRender(SDK::ScreenView* view, void* ctx
         auto* lp = SDK::ClientInstance::get()->getLocalPlayer();
         if (lp) {
             hasInitPacketSender = true; // one attempt only: a failure here must not repeat every frame
+#ifdef LATITE_DEBUG
+            latiteGuarded(
+                [&] {
+                    // Checks of the 1.26.60 Actor/Player layout: +0x10 should be the entt registry, +0x18 the entity id,
+                    // and the component found through the registry should be the same one the field points at.
+                    auto base = reinterpret_cast<uintptr_t>(lp);
+                    void *reg = nullptr, *ent = nullptr, *sv = nullptr, *ab = nullptr, *sup = nullptr;
+                    rtti::readPtr(reinterpret_cast<void*>(base + 0x10), &reg);
+                    rtti::readPtr(reinterpret_cast<void*>(base + 0x18), &ent);
+                    rtti::readPtr(reinterpret_cast<void*>(base + 0x240), &sv);
+                    rtti::readPtr(reinterpret_cast<void*>(base + 0x248), &ab);
+                    rtti::readPtr(reinterpret_cast<void*>(base + 0x5E0), &sup);
+                    Logger::Info("[Player] lp=0x{:X} +0x10=0x{:X} +0x18=0x{:X} stateVector=0x{:X} aabb=0x{:X} "
+                                 "supplies=0x{:X}",
+                                 base, reinterpret_cast<uintptr_t>(reg), reinterpret_cast<uintptr_t>(ent) & 0xFFFFFFFF,
+                                 reinterpret_cast<uintptr_t>(sv), reinterpret_cast<uintptr_t>(ab),
+                                 reinterpret_cast<uintptr_t>(sup));
+                    Logger::Info("[Player] component lookup: AABBShape=0x{:X} StateVector=0x{:X}",
+                                 reinterpret_cast<uintptr_t>(lp->tryGetComponent<SDK::AABBShapeComponent>()),
+                                 reinterpret_cast<uintptr_t>(lp->tryGetComponent<SDK::StateVectorComponent>()));
+                    rtti::logPointerMap("Player", lp, 0x180, 0x700);
+                },
+                "Caught SEH exception in the Player layout check");
+#endif
             latiteGuarded(
                 [&] {
                     auto* sender = lp->packetSender;
