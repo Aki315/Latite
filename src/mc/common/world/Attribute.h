@@ -5,7 +5,7 @@
 
 namespace SDK {
     class AttributeInstance {
-        char pad[0x80];
+        char pad[0x88];
 
     public:
         // AttributeInstance::getCurrentValue
@@ -28,11 +28,13 @@ namespace SDK {
 
     class Attributes {
     public:
-        inline static Attribute Hunger = Attribute(2, "minecraft:player.hunger");
-        inline static Attribute Saturation = Attribute(3, "minecraft:player.saturation");
-        inline static Attribute Health = Attribute(7, "minecraft:health");
-        // Golden hearts. Id 14 was found with the Health Indicator's "Debug: Attributes": it reads 4 after a golden
-        // apple and 16 after an enchanted one (max 16). Like the other ids it can change with a game update.
-        inline static Attribute Absorption = Attribute(14, "minecraft:absorption");
+        inline static Attribute Hunger = Attribute(1, "minecraft:player.hunger");
+        inline static Attribute Saturation = Attribute(2, "minecraft:player.saturation");
+        inline static Attribute Health = Attribute(6, "minecraft:health");
+        // Golden hearts. Id 14 was found with the Health Indicator's "Debug: Attributes" on 1.26.50 (it reads 4 after a
+        // golden apple and 16 after an enchanted one, max 16). In 1.26.60 hunger, saturation and health all moved down
+        // by one, so this is 13 by the same shift - NOT checked in the game yet; if golden hearts don't show, run the
+        // Debug: Attributes option again and use the id it reports.
+        inline static Attribute Absorption = Attribute(13, "minecraft:absorption");
     };
 }
