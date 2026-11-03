@@ -49,7 +49,6 @@ void ArmorHUD::render(DrawUtil& ctxGeneric, bool isDefault, bool inEditor) {
     std::array<SDK::ItemStack*, 6> items = {};
     // mainhand, offhand, boot, leggings, chestplate, helmet
 
-    if (!plr->supplies || !plr->supplies->inventory) return;
     if (auto sl = plr->supplies->inventory->getItem(plr->supplies->selectedSlot)) {
         items[0] = sl;
     }
@@ -59,7 +58,7 @@ void ArmorHUD::render(DrawUtil& ctxGeneric, bool isDefault, bool inEditor) {
     for (int i = 2; i < 6; i++) {
         int armor = i - 2;
         auto arm = plr->getArmor(3 - armor);
-        if (arm && arm->item) items[i] = arm;
+        if (arm->item) items[i] = arm;
     }
 
     int numItems = 0;

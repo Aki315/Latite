@@ -4,9 +4,6 @@
 
 #include "../TexturePtr.h"
 #include "ScreenContext.h"
-#include "../UiDrawGate.h"
-#include "util/SafeCall.h"
-#include "util/Logger.h"
 
 namespace SDK {
     namespace ui {
@@ -90,35 +87,18 @@ namespace SDK {
         ScreenContext* screenContext;
 
         void flushText(float lastFlush) {
-            if (uidraw::textFlushBroken.load()) return;
-            if (!latite_safe::run([&] { memory::callVirtual<void, float, std::optional<float>>(this, 6, lastFlush, {}); })) {
-                uidraw::textFlushBroken = true;
-                Logger::Warn("[UI] MinecraftUIRenderContext::flushText (vtable slot 6) crashed; text flush is off");
-            }
+            memory::callVirtual<void, float, std::optional<float>>(this, 6, lastFlush, {});
         }
 
         void drawImage(TexturePtr const& texture, Vec2 const& pos, Vec2 const& size, Vec2 const& uvPos,
                        Vec2 const& uvSize) {
-            if (uidraw::imageBroken.load()) return;
-            if (!latite_safe::run([&] {
-                    memory::callVirtual<void, BedrockTextureData const&, Vec2 const&, Vec2 const&, Vec2 const&,
-                                        Vec2 const&, bool>(this, 7, *texture.textureData, pos, size, uvPos, uvSize,
-                                                           false);
-                })) {
-                uidraw::imageBroken = true;
-                Logger::Warn("[UI] MinecraftUIRenderContext::drawImage (vtable slot 7) crashed; image drawing is off");
-            }
+            memory::callVirtual<void, BedrockTextureData const&, Vec2 const&, Vec2 const&, Vec2 const&, Vec2 const&,
+                                bool>(this, 7, *texture.textureData, pos, size, uvPos, uvSize, false);
         }
 
         void drawNineslice(TexturePtr const& texture, NinesliceInfo const& info) {
-            if (uidraw::imageBroken.load()) return;
-            if (!latite_safe::run([&] {
-                    memory::callVirtual<void, BedrockTextureData const&, NinesliceInfo const&>(
-                        this, 8, *texture.textureData, info);
-                })) {
-                uidraw::imageBroken = true;
-                Logger::Warn("[UI] MinecraftUIRenderContext::drawNineslice (vtable slot 8) crashed; image drawing is off");
-            }
+            memory::callVirtual<void, BedrockTextureData const&, NinesliceInfo const&>(this, 8, *texture.textureData,
+                                                                                       info);
         }
 
         virtual ~MinecraftUIRenderContext() = 0;                                      // 0x0

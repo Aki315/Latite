@@ -4,7 +4,6 @@
 #include "client/latite.h"
 #include "client/misc/ClientMessageQueue.h"
 #include "util/Util.h"
-#include "util/SafeCall.h"
 
 // Commands
 #include "commands/TestCommand.h"
@@ -109,14 +108,7 @@ bool CommandManager::runCommand(std::string const& line) {
                         args.push_back(newArgs[k]);
                     }
                     try {
-                        bool result = false;
-                        // A command that touches a game object whose layout changed must not take the game down.
-                        if (!latite_safe::run([&] { result = cmd->tryRun(label, args, myLine); })) {
-                            Logger::Warn("The command '{}' crashed inside the game and was stopped", label);
-                            Latite::getClientMessageQueue().push(
-                                util::Format("&cThe command crashed inside the game and was stopped (see latest.log)."));
-                            return false;
-                        }
+                        bool result = cmd->tryRun(label, args, myLine);
                         if (!result) {
                             std::string usage = cmd->getUsage();
 

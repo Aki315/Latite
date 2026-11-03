@@ -192,7 +192,5 @@ bool SDK::Actor::isInvisible() {
 }
 
 SDK::ItemStack* SDK::Actor::getArmor(int armorSlot) {
-    auto* equip = this->tryGetComponent<ActorEquipmentComponent>();
-    if (!equip || !equip->armorContainer) return nullptr;
-    return equip->armorContainer->getItem(armorSlot);
+    return this->tryGetComponent<ActorEquipmentComponent>()->armorContainer->getItem(armorSlot);
 }

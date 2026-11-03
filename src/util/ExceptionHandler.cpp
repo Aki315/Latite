@@ -5,9 +5,6 @@
 #include "util/Util.h"
 
 #include <atomic>
-#include "util/Rtti.h"
-#include "util/Trace.h"
-#include <tlhelp32.h>
 #include <cstdlib>
 #include <dbghelp.h>
 #include <iomanip>
@@ -500,46 +497,10 @@ namespace {
         DebugExceptionHandler::AbortProcess();
     }
 
-    // Set by HandleSehException when the exception was only logged and the process should keep running.
-    __declspec(thread) bool g_lastSehSurvived = false;
-    // Number of Run*WithSehGuard calls active on this thread (they report their own exceptions).
-    __declspec(thread) int g_sehGuardDepth = 0;
-
-    bool IsReportableFirstChance(DWORD code) {
-        switch (code) {
-        case 0xC0000005: // access violation
-        case 0xC0000006: // in-page error
-        case 0xC000001D: // illegal instruction
-        case 0xC0000094: // integer divide by zero
-        case 0xC0000096: // privileged instruction
-        case 0xC00000FD: // stack overflow
-        case 0xC0000374: // heap corruption
-        case 0xC0000409: // fast fail (stack cookie, abort, invalid call target)
-        case 0xC0000025: // non-continuable
-            return true;
-        default:
-            return false;
-        }
-    }
-
     int HandleSehException(EXCEPTION_POINTERS* exceptionInfo, char const* reason) noexcept {
         if (exceptionInfo && exceptionInfo->ExceptionRecord &&
             exceptionInfo->ExceptionRecord->ExceptionCode == cppExceptionCode) {
             return EXCEPTION_CONTINUE_SEARCH;
-        }
-
-        g_lastSehSurvived = false;
-        // A wrong field offset after a game update shows up as an access violation. Log it once per address and
-        // keep going, so one run can show every broken spot instead of only the first.
-        if (exceptionInfo && exceptionInfo->ExceptionRecord &&
-            exceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
-            crashHandlerEntered.load() == 0) {
-            try {
-                DebugExceptionHandler::WriteSurvivedReport(
-                    exceptionInfo, reason ? reason : "Caught SEH exception at Latite native boundary");
-            } catch (...) {}
-            g_lastSehSurvived = true;
-            return EXCEPTION_EXECUTE_HANDLER;
         }
 
         try {
@@ -551,15 +512,6 @@ namespace {
     }
 }
 
-namespace {
-    HANDLE g_soEvent = nullptr;
-    HANDLE g_soDone = nullptr;
-    HANDLE g_soThreadHandle = nullptr;
-    EXCEPTION_RECORD g_soRecord = {};
-    CONTEXT g_soContext = {};
-    std::atomic<int> g_soFlag { 0 };
-}
-
 __declspec(thread) CONTEXT g_CxxExceptionContext = {};
 __declspec(thread) bool g_bHasCxxExceptionContext = false;
 __declspec(thread) int g_ErrorBoundaryDepth = 0;
@@ -569,34 +521,6 @@ LONG WINAPI VectoredExceptionHandler(PEXCEPTION_POINTERS pExceptionInfo) {
         pExceptionInfo->ExceptionRecord->ExceptionCode == cppExceptionCode && pExceptionInfo->ContextRecord) {
         g_CxxExceptionContext = *pExceptionInfo->ContextRecord;
         g_bHasCxxExceptionContext = true;
-    }
-
-    // A stack overflow leaves almost no stack to work with, so the report is written by a helper thread that was
-    // started in advance; this thread only hands over the registers and waits.
-    if (pExceptionInfo && pExceptionInfo->ExceptionRecord &&
-        pExceptionInfo->ExceptionRecord->ExceptionCode == 0xC00000FD && g_soEvent && g_soDone &&
-        g_soFlag.exchange(1) == 0) {
-        DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &g_soThreadHandle, 0, FALSE,
-                        DUPLICATE_SAME_ACCESS);
-        g_soRecord = *pExceptionInfo->ExceptionRecord;
-        g_soContext = *pExceptionInfo->ContextRecord;
-        SetEvent(g_soEvent);
-        WaitForSingleObject(g_soDone, 8000);
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-
-    // Log crash-type exceptions as they happen, so a crash that the game's own handler swallows still leaves a
-    // trace in latest.log. Probes and guarded calls report on their own, and are skipped here.
-    if (pExceptionInfo && pExceptionInfo->ExceptionRecord && rtti::probeDepth == 0 && g_sehGuardDepth == 0 &&
-        IsReportableFirstChance(pExceptionInfo->ExceptionRecord->ExceptionCode)) {
-        static __declspec(thread) bool inReport = false;
-        if (!inReport) {
-            inReport = true;
-            try {
-                DebugExceptionHandler::WriteSurvivedReport(pExceptionInfo, "First-chance exception");
-            } catch (...) {}
-            inReport = false;
-        }
     }
 
     return EXCEPTION_CONTINUE_SEARCH;
@@ -639,9 +563,6 @@ void DebugExceptionHandler::Install() {
         previousTerminateHandler = std::set_terminate(TerminateHandler);
         handlersInstalled = true;
     }
-#ifdef LATITE_DEBUG
-    StartHangWatchdog();
-#endif
 }
 
 void DebugExceptionHandler::Uninstall() {
@@ -692,38 +613,30 @@ bool DebugExceptionHandler::IsHandlingCrash() {
 
 std::uintptr_t DebugExceptionHandler::RunWithSehGuard(SehCallback callback, void* context,
                                                       char const* reason) noexcept {
-    std::uintptr_t result = 0;
-    ++g_sehGuardDepth;
     __try {
         if (callback) {
-            result = callback(context);
+            return callback(context);
         }
     } __except (HandleSehException(GetExceptionInformation(), reason)) {
-        --g_sehGuardDepth;
-        if (!g_lastSehSurvived) AbortProcess();
-        return 0;
+        AbortProcess();
     }
-    --g_sehGuardDepth;
-    return result;
+
+    return 0;
 }
 
 void DebugExceptionHandler::RunVoidWithSehGuard(SehVoidCallback callback, void* context, char const* reason) noexcept {
-    ++g_sehGuardDepth;
     __try {
         if (callback) {
             callback(context);
         }
     } __except (HandleSehException(GetExceptionInformation(), reason)) {
-        --g_sehGuardDepth;
-        if (!g_lastSehSurvived) AbortProcess();
-        return;
+        AbortProcess();
     }
-    --g_sehGuardDepth;
 }
 
-std::string DebugExceptionHandler::GenerateStackTrace(CONTEXT* contextArg, HANDLE threadHandle) {
+std::string DebugExceptionHandler::GenerateStackTrace(CONTEXT* contextArg) {
     HANDLE process = GetCurrentProcess();
-    HANDLE thread = threadHandle ? threadHandle : GetCurrentThread();
+    HANDLE thread = GetCurrentThread();
 
     CONTEXT context = {};
     if (contextArg) {
@@ -847,214 +760,6 @@ std::filesystem::path DebugExceptionHandler::WriteCrashReport(EXCEPTION_POINTERS
     AppendRawLog(stackReport.str(), false);
 
     return dumpPath;
-}
-
-void DebugExceptionHandler::WriteSurvivedReport(EXCEPTION_POINTERS* exceptionInfo, std::string_view reason) {
-    static std::atomic<unsigned> reportCount { 0 };
-    static std::atomic<DWORD64> seenAddresses[64];
-
-    const DWORD64 address = (exceptionInfo && exceptionInfo->ExceptionRecord)
-                                ? reinterpret_cast<DWORD64>(exceptionInfo->ExceptionRecord->ExceptionAddress)
-                                : 0;
-    const unsigned known = reportCount.load();
-    for (unsigned i = 0; i < known && i < 64; i++) {
-        if (seenAddresses[i].load() == address) return;
-    }
-    const unsigned index = reportCount.fetch_add(1);
-    if (index >= 64) return;
-    seenAddresses[index].store(address);
-
-    CONTEXT context = {};
-    if (exceptionInfo && exceptionInfo->ContextRecord) {
-        context = *exceptionInfo->ContextRecord;
-    } else {
-        RtlCaptureContext(&context);
-    }
-
-    std::ostringstream report;
-    report << "\n";
-    const bool firstChance = reason == "First-chance exception";
-    report << MakeCenteredDivider(firstChance ? "Exception seen (the game may handle it, or this may be the crash)"
-                                              : "Latite Survived Exception (execution continues)",
-                                  '-', crashReportWidth)
-           << "\n";
-    report << "Time: " << MakeTimestamp(false) << "\n";
-    report << "Reason: " << reason << "\n";
-    report << "Thread ID: " << GetCurrentThreadId() << "\n";
-    if (exceptionInfo && exceptionInfo->ExceptionRecord) {
-        auto exceptionRecord = exceptionInfo->ExceptionRecord;
-        report << "Exception Code: 0x" << std::hex << std::uppercase << exceptionRecord->ExceptionCode << std::dec
-               << "\n";
-        report << "Exception Address: " << FormatAddress(reinterpret_cast<DWORD64>(exceptionRecord->ExceptionAddress))
-               << "\n";
-        if (exceptionRecord->NumberParameters >= 2) {
-            report << "Access: " << (exceptionRecord->ExceptionInformation[0] == 0 ? "read" : "write")
-                   << " of address 0x" << std::hex << std::uppercase << exceptionRecord->ExceptionInformation[1]
-                   << std::dec << "\n";
-        }
-    }
-    AppendRawLog(report.str());
-
-    std::ostringstream stackReport;
-    if (exceptionInfo && exceptionInfo->ExceptionRecord &&
-        exceptionInfo->ExceptionRecord->ExceptionCode == 0xC00000FD) {
-        stackReport << "(no stack trace for a stack overflow)\n";
-    } else {
-        try {
-            stackReport << GenerateStackTrace(&context);
-        } catch (...) {
-            stackReport << "Stack trace unavailable.\n";
-        }
-    }
-    stackReport << "\n" << std::string(crashReportWidth, '-') << "\n";
-    AppendRawLog(stackReport.str(), false);
-}
-
-namespace {
-    std::atomic<bool> watchdogStarted { false };
-    std::atomic<bool> watchdogStop { false };
-
-    void DumpAllThreadStacks(const char* when, DWORD seconds) {
-        std::ostringstream head;
-        head << "\n" << MakeCenteredDivider("Hang detected: no hook has run for a while", '-', crashReportWidth) << "\n";
-        head << "Time: " << MakeTimestamp(false) << " (" << when << ", " << seconds << " s without progress)\n";
-        const char* last = latiteLastHook.load();
-        head << "Last hook that ran: " << (last ? last : "(none)") << " on thread " << latiteLastHookThread.load()
-             << "\n";
-        AppendRawLog(head.str());
-
-        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-        if (snap == INVALID_HANDLE_VALUE) return;
-        THREADENTRY32 te = {};
-        te.dwSize = sizeof(te);
-        const DWORD self = GetCurrentThreadId();
-        const DWORD pid = GetCurrentProcessId();
-
-        struct Captured {
-            DWORD id;
-            HANDLE handle;
-            CONTEXT ctx;
-        };
-        std::vector<Captured> threads;
-        if (Thread32First(snap, &te)) {
-            do {
-                if (te.th32OwnerProcessID != pid || te.th32ThreadID == self) continue;
-                HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION,
-                                      FALSE, te.th32ThreadID);
-                if (!h) continue;
-                Captured c = {};
-                c.id = te.th32ThreadID;
-                c.handle = h;
-                c.ctx.ContextFlags = CONTEXT_FULL;
-                // Suspend only long enough to copy the registers. Walking the stack afterwards is safe because
-                // a hung thread's stack does not change, and it keeps us from deadlocking on a lock it holds.
-                if (SuspendThread(h) != static_cast<DWORD>(-1)) {
-                    const bool ok = GetThreadContext(h, &c.ctx) != 0;
-                    ResumeThread(h);
-                    if (ok) {
-                        threads.push_back(c);
-                        continue;
-                    }
-                }
-                CloseHandle(h);
-            } while (Thread32Next(snap, &te));
-        }
-        CloseHandle(snap);
-
-        int shown = 0;
-        for (auto& t : threads) {
-            std::string trace;
-            try {
-                trace = DebugExceptionHandler::GenerateStackTrace(&t.ctx, t.handle);
-            } catch (...) {}
-            // Only threads running game or Latite code are interesting; the rest are idle system waiters.
-            const bool interesting = trace.find("Minecraft") != std::string::npos ||
-                                     trace.find("Latite") != std::string::npos;
-            if (interesting) {
-                shown++;
-                std::ostringstream one;
-                one << "--- thread " << t.id << " ---\n";
-                std::istringstream lines(trace);
-                std::string line;
-                int count = 0;
-                while (std::getline(lines, line) && count < 40) {
-                    one << line << "\n";
-                    if (line.rfind("#", 0) == 0) count++;
-                }
-                AppendRawLog(one.str(), false);
-            }
-            CloseHandle(t.handle);
-        }
-        AppendRawLog("(" + std::to_string(shown) + " of " + std::to_string(threads.size()) +
-                         " threads run game or Latite code)\n" + std::string(crashReportWidth, '-') + "\n",
-                     false);
-    }
-
-    DWORD WINAPI HangWatchdogProc(LPVOID) {
-        uint64_t lastBeat = latiteHeartbeat.load();
-        DWORD stalled = 0;
-        int dumps = 0;
-        while (!watchdogStop.load()) {
-            Sleep(1000);
-            const uint64_t beat = latiteHeartbeat.load();
-            if (beat != lastBeat || beat == 0) {
-                lastBeat = beat;
-                stalled = 0;
-                dumps = 0;
-                continue;
-            }
-            stalled++;
-            if ((stalled == 4 || stalled == 8) && dumps < 2) {
-                dumps++;
-                try {
-                    DumpAllThreadStacks(dumps == 1 ? "first dump" : "second dump", stalled);
-                } catch (...) {}
-            }
-        }
-        return 0;
-    }
-}
-
-namespace {
-    DWORD WINAPI StackOverflowReporterProc(LPVOID) {
-        WaitForSingleObject(g_soEvent, INFINITE);
-        try {
-            std::ostringstream head;
-            head << "\n" << MakeCenteredDivider("STACK OVERFLOW (infinite recursion)", '-', crashReportWidth) << "\n";
-            head << "Time: " << MakeTimestamp(false) << "\n";
-            head << "Faulting address: " << FormatAddress(reinterpret_cast<DWORD64>(g_soRecord.ExceptionAddress))
-                 << "\n";
-            const char* last = latiteLastHook.load();
-            head << "Last hook that ran: " << (last ? last : "(none)") << "\n";
-            AppendRawLog(head.str());
-            AppendRawLog(DebugExceptionHandler::GenerateStackTrace(&g_soContext, g_soThreadHandle) +
-                             std::string(crashReportWidth, '-') + "\n",
-                         false);
-        } catch (...) {}
-        SetEvent(g_soDone);
-        return 0;
-    }
-}
-
-std::string DebugExceptionHandler::DescribeAddress(uintptr_t address) {
-    try {
-        HANDLE process = GetCurrentProcess();
-        CriticalSectionGuard symbolGuard(EnterSymbolLock, LeaveSymbolLock);
-        if (EnsureSymbolsLocked()) return FormatStackFrame(process, address);
-    } catch (...) {}
-    return FormatAddress(address);
-}
-
-void DebugExceptionHandler::StartHangWatchdog() {
-    if (watchdogStarted.exchange(true)) return;
-    g_soEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    g_soDone = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (g_soEvent && g_soDone) {
-        HANDLE so = CreateThread(nullptr, 0, StackOverflowReporterProc, nullptr, 0, nullptr);
-        if (so) CloseHandle(so);
-    }
-    HANDLE h = CreateThread(nullptr, 0, HangWatchdogProc, nullptr, 0, nullptr);
-    if (h) CloseHandle(h);
 }
 
 void LogUnknownExceptionDetails(std::string_view reason) {

@@ -2,7 +2,6 @@
 #include "DrawUtil3D.h"
 #include "mc/common/client/renderer/MeshUtils.h"
 #include <mc/common/client/renderer/Tessellator.h>
-#include <mc/common/client/renderer/UiDrawGate.h>
 
 #include <algorithm>
 #include <cmath>
@@ -66,7 +65,6 @@ void MCDrawUtil3D::drawLine(Vec3 const& p1, Vec3 const& p2, d2d::Color const& co
         return;
     }
 
-    if (!SDK::uidraw::meshReady() || !screenContext || !screenContext->tess) return;
     auto scn = screenContext;
     auto tess = scn->tess;
     *scn->shaderColor = { 1.f, 1.f, 1.f, 1.f };
@@ -97,7 +95,6 @@ void MCDrawUtil3D::drawQuad(Vec3 a, Vec3 b, Vec3 c, Vec3 d, d2d::Color const& co
         return;
     }
 
-    if (!SDK::uidraw::meshReady() || !screenContext || !screenContext->tess) return;
     auto scn = screenContext;
     auto tess = scn->tess;
     *scn->shaderColor = { 1.f, 1.f, 1.f, 1.f };
@@ -129,7 +126,6 @@ void MCDrawUtil3D::drawQuad(Vec3 a, Vec3 b, Vec3 c, Vec3 d, d2d::Color const& co
 }
 
 void MCDrawUtil3D::fillQuad(Vec3 p1, Vec3 p2, Vec3 p3, Vec3 p4, d2d::Color const& color) {
-    if (!SDK::uidraw::meshReady() || !screenContext || !screenContext->tess) return;
     auto scn = screenContext;
 
     auto tess = scn->tess;
@@ -194,6 +190,5 @@ void MCDrawUtil3D::drawBox(AABB const& bb, d2d::Color const& color) {
 }
 
 void MCDrawUtil3D::flush() {
-    if (!SDK::uidraw::meshReady()) return;
     SDK::MeshHelpers::renderMeshImmediately(screenContext, screenContext->tess, material);
 }

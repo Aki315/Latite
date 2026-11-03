@@ -13,7 +13,6 @@ namespace SDK {
         virtual void sendTo(void* networkIdentifier, uint8_t subClientId, Packet* pkt);
         virtual void sendToServer(Packet* pkt) = 0;
 
-        static inline size_t offNetworkSystem = 0x20;
-        CLASS_FIELD_DYN(NetworkSystem*, networkSystem, offNetworkSystem);
+        CLASS_FIELD(NetworkSystem*, networkSystem, 0x20);
     };
 }

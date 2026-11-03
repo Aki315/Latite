@@ -12,30 +12,6 @@
 #include <mutex>
 #include <type_traits>
 #include <unordered_map>
-#include "util/Trace.h"
-
-#ifdef LATITE_CRASH_REPORTING
-#include "util/ExceptionHandler.h"
-
-namespace eventing_detail {
-    struct GuardedCall {
-        Listener* listener;
-        EventListenerFunc fptr;
-        Event* ev;
-    };
-
-    inline void __cdecl guardedCallThunk(void* context) {
-        auto* call = static_cast<GuardedCall*>(context);
-#ifdef LATITE_DEBUG
-        const bool first = latiteTraceListener(*call->ev, call->fptr);
-#endif
-        (call->listener->*call->fptr)(*call->ev);
-#ifdef LATITE_DEBUG
-        if (first) Logger::Info("[Trace] that listener returned");
-#endif
-    }
-}
-#endif
 
 class Eventing final {
 public:
@@ -69,16 +45,7 @@ public:
             if ((registration.callback.callWhileInactive || state->listener->shouldListen()) &&
                 state->listener->shouldListenToEvent(EventType::hash)) {
                 const bool isCancel = ev.isCancellable();
-#ifdef LATITE_CRASH_REPORTING
-                // Debug build: an access violation in one listener is logged and must not stop the others.
-                {
-                    eventing_detail::GuardedCall call { state->listener, registration.callback.fptr, &ev };
-                    DebugExceptionHandler::RunVoidWithSehGuard(eventing_detail::guardedCallThunk, &call,
-                                                               "Caught SEH exception in an event listener");
-                }
-#else
                 (state->listener->*registration.callback.fptr)(ev);
-#endif
                 if (isCancel) {
                     auto& cEv = reinterpret_cast<Cancellable&>(ev);
                     if (cEv.isCancelled()) {

@@ -1,6 +1,5 @@
 #include "pch.h"
 #include "Renderer.h"
-#include "util/Trace.h"
 #include "client/event/Eventing.h"
 #include "client/event/events/RenderOverlayEvent.h"
 #include "client/event/events/RendererCleanupEvent.h"
@@ -100,11 +99,7 @@ void Renderer::setCommandQueue(ID3D12CommandQueue* queue) {
 }
 
 bool Renderer::init(IDXGISwapChain* chain) {
-    LATITE_TRACE_EVERY("Renderer::init", 600);
-    if (!shouldInit.load(std::memory_order_acquire)) {
-        LATITE_TRACE_HOOK("Renderer::init (skipped: shouldInit is false)");
-        return false;
-    }
+    if (!shouldInit.load(std::memory_order_acquire)) return false;
 
     if (!chain) {
         Logger::Warn("Renderer init called with a null swap chain");
@@ -167,7 +162,6 @@ bool Renderer::init(IDXGISwapChain* chain) {
         isDX11 = true;
     } else {
         if (!commandQueue) {
-            LATITE_TRACE_HOOK("Renderer::init (waiting for the D3D12 command queue)");
             reqCommandQueue = true;
             return false;
         }

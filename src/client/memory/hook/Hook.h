@@ -5,7 +5,6 @@
 #include <vector>
 #include <memory>
 #include <exception>
-#include "util/Trace.h"
 
 using func_ptr_t = void*;
 

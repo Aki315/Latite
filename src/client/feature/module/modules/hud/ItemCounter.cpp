@@ -77,7 +77,6 @@ void ItemCounter::render(DrawUtil& ct, bool isDefault, bool inEditor) {
     this->rect.bottom = rect.top + 16.f;
 
     auto lp = SDK::ClientInstance::get()->getLocalPlayer();
-    if (!lp || !lp->supplies || !lp->supplies->inventory) return;
     auto supplies = lp->supplies;
     auto inv = supplies->inventory;
 

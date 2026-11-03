@@ -5,7 +5,6 @@
 namespace SDK {
     class NetworkSystem {
     public:
-        static inline size_t offRemoteConnector = 0xF8;
-        CLASS_FIELD_DYN(RemoteConnectorComposite*, remoteConnector, offRemoteConnector);
+        CLASS_FIELD(RemoteConnectorComposite*, remoteConnector, 0xF8);
     };
 }

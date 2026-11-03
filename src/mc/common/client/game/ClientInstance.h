@@ -6,32 +6,14 @@
 namespace SDK {
     class ClientInstance {
     public:
-        // Field offsets. They are re-found from the game's RTTI when ClientInstance is first obtained (calibrate),
-        // because game updates keep moving them.
-        static inline size_t offMinecraftGame = 0x1A8;
-        static inline size_t offMinecraft = 0x1B0;
-        static inline size_t offLevelRenderer = 0x1C0;
-        static inline size_t offPacketSender = 0x1D0;
-        static inline size_t offInputHandler = 0x1E0;
-        static inline size_t offGuiData = 0x650;
-        static inline size_t offOptions = 0xE10;
-        // Where the LocalPlayer pointer sits in ClientInstance; -1 until found (see calibrateLocalPlayer).
-        static inline ptrdiff_t offLocalPlayer = -1;
-        // WeakEntityRef { EntityRegistry*, control block, entity id } of the local player (1.26.60).
-        static inline size_t offLocalPlayerRef = 0x268;
-
-        CLASS_FIELD_DYN(class MinecraftGame*, minecraftGame, offMinecraftGame);
-        CLASS_FIELD_DYN(class Minecraft*, minecraft, offMinecraft);
-        CLASS_FIELD_DYN(class LevelRenderer*, levelRenderer, offLevelRenderer);
-        CLASS_FIELD_DYN(class PacketSender*, packetSender, offPacketSender);
-        CLASS_FIELD_DYN(class ClientInputHandler*, inputHandler, offInputHandler);
-        // Pointer position in window pixels. Read from Windows: the game's own copy moved in 1.26.60.
-        __declspec(property(get = __get_cursorPos)) struct Vec2 cursorPos;
-        struct Vec2& __get_cursorPos();
+        CLASS_FIELD(class MinecraftGame*, minecraftGame, 0x1A8);
+        CLASS_FIELD(class Minecraft*, minecraft, 0x1B0);
+        CLASS_FIELD(class LevelRenderer*, levelRenderer, 0x1C0);
+        CLASS_FIELD(class PacketSender*, packetSender, 0x1D0);
+        CLASS_FIELD(class ClientInputHandler*, inputHandler, 0x1E0);
+        CLASS_FIELD(struct Vec2, cursorPos, 0x588);
 
         static ClientInstance* get();
-        // Called from a hook that receives the LocalPlayer, to find where ClientInstance keeps it. True once found.
-        static bool calibrateLocalPlayer(void* player);
         class BlockSource* getRegion();
         class LocalPlayer* getLocalPlayer();
         class GuiData* getGuiData();
@@ -44,9 +26,6 @@ namespace SDK {
         void releaseCursor();
 
     private:
-        static void discoverLocalPlayer();
-        static void calibrateGuiData(ClientInstance* inst);
-        static void calibrate(ClientInstance* inst, class MinecraftGame* game);
         static ClientInstance* instance;
     };
 }

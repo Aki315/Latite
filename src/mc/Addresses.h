@@ -32,7 +32,7 @@ public:
             [](memory::signature_store&, uintptr_t res) {
                 return res;
             },
-            "74 ? 48 8B 03 48 8B 80 ? ? ? ? 48 89 D9 FF 15 ? ? ? ? 84 C0 75 ? 48 8B ?"_sig, "ThirdPersonNametag"
+            "74 ? 48 8B 03 48 8B 80 ? ? ? ? 48 89 D9 FF 15 ? ? ? ? 84 C0 75 ? 48 8B 4B"_sig, "ThirdPersonNametag"
         };
     };
 
@@ -60,7 +60,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "55 41 57 41 56 41 55 41 54 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 48 C7 85 ? ? ? ? ? ? ? ? 89 D6 ? ? ?"_sig,
+        "55 41 57 41 56 41 55 41 54 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 48 C7 85 ? ? ? ? ? ? ? ? 89 D6 4C 8B 3D"_sig,
         "MainWindow::_windowProcCallback"
     };
 
@@ -83,7 +83,7 @@ public:
     inline static SigImpl Options_setPerspective { [](memory::signature_store&, uintptr_t res) {
                                                       return res;
                                                   },
-                                                   "56 57 53 48 83 EC ? 89 D6 48 89 CF 48 8B 81"_sig,
+                                                   "56 57 48 83 EC ? 89 D6 48 89 CF 48 8B 81"_sig,
                                                    "Options::setPerspective" };
 
     inline static SigImpl Options_getHideHand {
@@ -98,7 +98,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "56 48 83 EC ? 48 89 CE 48 8B 01 48 8B 80 ? ? ? ? FF 15 ? ? ? ? 84 C0 74 ? 48 8B 8E ? ? ? ? 48 8B 01 48 8B 80 ? ? ? ? 48 8B 15 ? ? ? ? 48 83 C4 ? 5E 48 FF E2 ? ? ? ? ? ? ? CC CC CC CC CC CC CC CC CC CC CC CC CC 56 48 83 EC"_sig,
+        "56 48 83 EC ? 48 89 CE 48 8B 01 48 8B 80 ? ? ? ? FF 15 ? ? ? ? 84 C0 74 ? 48 8B 8E ? ? ? ? 48 8B 01 48 8B 80 ? ? ? ? 48 8B 15 ? ? ? ? 48 83 C4 ? 5E 48 FF E2 90 48 83 C4 ? 5E C3 CC CC CC CC CC CC CC CC CC CC CC CC CC 56 48 83 EC"_sig,
         "ClientInstance::grabCursor"
     };
 
@@ -106,7 +106,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "56 48 83 EC ? 48 89 CE 48 8B 01 48 8B 80 ? ? ? ? FF 15 ? ? ? ? 84 C0 74 ? 48 8B 8E ? ? ? ? 48 8B 01 48 8B 80 ? ? ? ? 48 8B 15 ? ? ? ? 48 83 C4 ? 5E 48 FF E2 ? ? ? ? ? ? ? CC CC CC CC CC CC CC CC CC CC CC CC CC 56 53"_sig,
+        "56 48 83 EC ? 48 89 CE 48 8B 01 48 8B 80 ? ? ? ? FF 15 ? ? ? ? 84 C0 74 ? 48 8B 8E ? ? ? ? 48 8B 01 48 8B 80 ? ? ? ? 48 8B 15 ? ? ? ? 48 83 C4 ? 5E 48 FF E2 90 48 83 C4 ? 5E C3 CC CC CC CC CC CC CC CC CC CC CC CC CC 56 53"_sig,
         "ClientInstance::releaseCursor"
     };
 
@@ -114,7 +114,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "55 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 44 0F 29 6D ? 44 0F 29 65 ? 44 0F 29 5D ? 44 0F 29 55 ? ? ? ? ? ?"_sig,
+        "55 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 44 0F 29 6D ? 44 0F 29 65 ? 44 0F 29 5D ? 44 0F 29 55 ? 66 44 0F 7F 4D"_sig,
         "MultiPlayerLevel::_subTick"
     };
 
@@ -122,7 +122,7 @@ public:
         [](memory::signature_store& storage, uintptr_t) {
             return storage.deref(1);
         },
-        "E8 ? ? ? ? 3C ? 75 ? 48 8B 8E ? ? ? ? 48 C7 45 ? ? ? ? ? 48 8B 01 48 8B 40 ? 48 8D 55 ? FF 15 ? ? ? ? 90 48 8B 4D ? 48 85 C9 74 ? 48 8D 45 ? 48 39 C1 0F 95 C2 48 8B 01"_sig,
+        "E8 ? ? ? ? 3C ? 75 ? 48 8B 8E ? ? ? ? 48 C7 45 ? ? ? ? ? 48 8B 01 48 8B 40 ? 48 8D 55 ? FF 15 ? ? ? ? 48 8B 4D"_sig,
         "ClientInstanceScreenModel::sendChatMessage"
     };
 
@@ -138,7 +138,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "55 41 57 41 56 41 55 41 54 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 44 0F 29 BD ? ? ? ? 44 0F 29 B5 ? ? ? ? 44 0F 29 AD ? ? ? ? 44 0F 29 A5 ? ? ? ? 44 0F 29 9D ? ? ? ? 44 0F 29 95 ? ? ? ? 44 0F 29 8D ? ? ? ? 44 0F 29 85 ? ? ? ? 0F 29 BD ? ? ? ? 0F 29 B5 ? ? ? ? 48 C7 85 ? ? ? ? ? ? ? ? 48 89 ? ? 05"_sig,
+        "55 41 57 41 56 41 55 41 54 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 44 0F 29 BD ? ? ? ? 44 0F 29 B5 ? ? ? ? 44 0F 29 AD ? ? ? ? 44 0F 29 A5 ? ? ? ? 44 0F 29 9D ? ? ? ? 44 0F 29 95 ? ? ? ? 44 0F 29 8D ? ? ? ? 44 0F 29 85 ? ? ? ? 0F 29 BD ? ? ? ? 0F 29 B5 ? ? ? ? 48 C7 85 ? ? ? ? ? ? ? ? 48 89 CE 8B 05"_sig,
         "GameCore::handleMouseInput"
     };
 
@@ -152,14 +152,14 @@ public:
         [](memory::signature_store& store, uintptr_t) {
             return store.deref(1);
         },
-        "E8 ? ? ? ? 90 48 8B 4B ? 48 85 C9 74 ? 48 8B 01 48 8B 40 ? 48 89 FA FF 15 ? ? ? ? 90 48 8D 4D ? E8"_sig,
+        "E8 ? ? ? ? 48 8B 4B ? 48 85 C9 74 ? 48 8B 01 48 8B 40 ? 48 89 FA FF 15 ? ? ? ? 48 8D 4D"_sig,
         "ScreenView::setupAndRender"
     };
 
     inline static SigImpl MinecraftGame__update { [](memory::signature_store& store, uintptr_t) {
                                                      return store.deref(1);
                                                  },
-                                                  "E8 ? ? ? ? 90 48 8B 8F ? ? ? ? BA ? ? ? ? E8 ? ? ? ? 90 48 8B 9F ? ? ? ? E8 ? ? ? ? 48 89 C7 E8"_sig,
+                                                  "E8 ? ? ? ? 48 8B 8F ? ? ? ? BA ? ? ? ? E8 ? ? ? ? 48 8B 9F"_sig,
                                                   "MinecraftGame::_update" };
 
     inline static SigImpl AppPlatform_GameCorePC_pickImage {
@@ -190,7 +190,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "55 41 56 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 44 0F 29 5D ? 44 0F 29 55 ? 44 0F 29 4D ? 44 0F 29 45 ? 0F 29 7D ? 0F 29 75 ? 48 C7 45 ? ? ? ? ? ? 89 ? 48 89 ? ? ? ?"_sig,
+        "55 41 56 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 44 0F 29 5D ? 44 0F 29 55 ? 44 0F 29 4D ? 44 0F 29 45 ? 0F 29 7D ? 0F 29 75 ? 48 C7 45 ? ? ? ? ? 48 89 D7 48 89 CE 48 8B 89"_sig,
         "LocalPlayer::applyTurnDelta"
     };
 
@@ -199,7 +199,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "41 57 41 56 41 55 41 54 56 57 55 53 48 81 EC ? ? ? ? 48 8B ? 24"_sig,
+        "41 57 41 56 41 55 41 54 56 57 55 53 48 81 EC ? ? ? ? 48 8B 84 24"_sig,
         "ClientInputUpdateSystemInternal::tickUpdateClientInput"
     };
 
@@ -219,7 +219,7 @@ public:
     inline static SigImpl ItemStackVtable { [](memory::signature_store& store, uintptr_t) {
                                                return store.deref(3);
                                            },
-                                            "48 8D 1D ? ? ? ? 48 89 5D ? 48 8D 4D ? 48 89 ?"_sig, "ItemStackVtable" };
+                                            "48 8D 1D ? ? ? ? 48 89 5D ? 48 8D 4D ? 48 89 F2"_sig, "ItemStackVtable" };
 
     inline static SigImpl ItemStackBase_destructor {
         [](memory::signature_store&, uintptr_t res) {
@@ -233,7 +233,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "55 41 57 41 56 41 55 41 54 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 44 0F 29 4D ? 44 0F 29 45 ? 0F 29 7D ? 0F 29 75 ? 48 C7 45 ? ? ? ? ? 0F 28 F3 0F 28 FA 44 0F 28 C1 48 89 CE 48 ? ?"_sig,
+        "55 41 57 41 56 41 55 41 54 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 44 0F 29 4D ? 44 0F 29 45 ? 0F 29 7D ? 0F 29 75 ? 48 C7 45 ? ? ? ? ? 0F 28 F3 0F 28 FA 44 0F 28 C1 48 89 CE 48 8B 0D"_sig,
         "Tessellator::vertex"
     };
 
@@ -241,7 +241,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "56 57 48 83 EC ? 48 8B 05 ? ? ? ? 48 31 E0 48 89 44 24 ? 80 B9 ? ? ? ? ? 0F 85 ? ? ? ? 80 B9"_sig,
+        "56 57 55 53 48 83 EC ? 48 8B 05 ? ? ? ? 48 31 E0 48 89 44 24 ? 80 B9 ? ? ? ? ? 0F 85 ? ? ? ? 80 B9"_sig,
         "Tessellator::begin"
     };
 
@@ -271,7 +271,7 @@ public:
         [](memory::signature_store& store, uintptr_t) {
             return store.deref(1);
         },
-        "E8 ? ? ? ? 90 48 8D 55 ? 4C 8D 85 ? ? ? ? 48 89 F1 E8 ? ? ? ? 90 80 BF"_sig, "ItemRenderer::renderGuiItemNew"
+        "E8 ? ? ? ? 48 8D 55 ? 4C 8D 85 ? ? ? ? 48 89 F1 E8 ? ? ? ? 80 BF"_sig, "ItemRenderer::renderGuiItemNew"
     };
 
     inline static SigImpl ActorRenderDispatcher_render {
@@ -344,7 +344,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "55 41 57 41 56 41 55 41 54 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 0F 29 B5 ? ? ? ? 48 C7 85 ? ? ? ? ? ? ? ? 4D 89 ? 4D 89 C6 48 89 D6 48 89 CF 41 8B 80"_sig,
+        "55 41 57 41 56 41 55 41 54 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 0F 29 B5 ? ? ? ? 48 C7 85 ? ? ? ? ? ? ? ? 4D 89 CF 4D 89 C6 48 89 D6 48 89 CF 41 8B 80"_sig,
         "Actor::attack"
     };
 
@@ -367,7 +367,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "49 89 D0 48 8B 51 ? 48 3B 51 ? 0F 84 ? ? ? ? 41 8B 00 89 02 0F 57 C0 0F 11 42 ? 0F 11 42 ? 41 0F 10 48 ? 41 0F 10 50 ? 0F 11 52 ? 0F 11 4A ? 49 C7 40 ? ? ? ? ? 49 C7 40 ? ? ? ? ? 41 C6 40 ? ? ? ?"_sig,
+        "49 89 D0 48 8B 51 ? 48 3B 51 ? 0F 84 ? ? ? ? 41 8B 00 89 02 0F 57 C0 0F 11 42 ? 0F 11 42 ? 41 0F 10 48 ? 41 0F 10 50 ? 0F 11 52 ? 0F 11 4A ? 49 C7 40 ? ? ? ? ? 49 C7 40 ? ? ? ? ? 41 C6 40 ? ? C6 42"_sig,
         "std::vector<GuiMessage>::emplace_back"
     };
 
@@ -392,7 +392,7 @@ public:
         [](memory::signature_store& store, uintptr_t) {
             return store.deref(3);
         },
-        "48 8D 15 ? ? ? ? 4C 8D 45 ? E8 ? ? ? ? 90 48 8D 4D ? E8 ? ? ? ? 48 8D 0D ? ? ? ? E8 ? ? ? ? 48 8D 0D ? ? ? ? E8 ? ? ? ? E9 ? ? ? ? 48 8D 0D"_sig,
+        "48 8D 15 ? ? ? ? 4C 8D 45 ? E8 ? ? ? ? 48 8D 4D ? E8 ? ? ? ? 48 8D 0D ? ? ? ? E8 ? ? ? ? 48 8D 0D ? ? ? ? E8 ? ? ? ? E9 ? ? ? ? 48 8D 0D"_sig,
         "mce::RenderMaterialGroup::common"
     };
 
@@ -408,7 +408,7 @@ public:
         [](memory::signature_store&, uintptr_t res) {
             return res;
         },
-        "55 41 56 56 57 53 48 83 EC ? 48 8D 6C 24 ? 48 C7 45 ? ? ? ? ? ? 89 ? 44 89 ? 48 89 D7 49 89 CE 48 83 79"_sig,
+        "55 41 56 56 57 53 48 83 EC ? 48 8D 6C 24 ? 48 C7 45 ? ? ? ? ? 44 89 CB 44 89 C6 48 89 D7 49 89 CE 48 83 79 ? ? 75"_sig,
         "ClientInstanceScreenModel::forwardSoundSubtitle"
     };
 

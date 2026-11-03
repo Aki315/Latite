@@ -10,11 +10,7 @@ namespace SDK {
     public:
         bool isCursorGrabbed();
 
-        // Re-found from RTTI by calibrate(); false until the game has filled the field in.
-        static inline size_t offGameRenderer = 0x1440;
-        static bool calibrate(MinecraftGame* game);
-
-        CLASS_FIELD_DYN(GameRenderer*, gameRenderer, offGameRenderer);
+        CLASS_FIELD(GameRenderer*, gameRenderer, 0x1440);
 
         class FontRepository* getFontRepository();
 

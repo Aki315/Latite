@@ -4,7 +4,6 @@
 #include <cstdint>
 
 #include "Latite.h"
-#include "util/InputFallback.h"
 #include "BuildTimestamp.h"
 #include "localization/LocalizeString.h"
 
@@ -37,7 +36,6 @@
 #include "mc/common/client/game/ClientInstance.h"
 #include "mc/common/client/game/MinecraftGame.h"
 #include "mc/common/client/game/FontRepository.h"
-#include <tlhelp32.h>
 #include <winrt/windows.ui.viewmanagement.h>
 #include <winrt/windows.storage.streams.h>
 
@@ -63,23 +61,6 @@ using namespace winrt::Windows::Storage;
 using namespace std;
 
 namespace {
-    // Used when not a single signature could be found: lists the modules loaded in the game process with their sizes, so
-    // it can be seen whether the game's code is still in Minecraft.Windows.exe (the signatures are searched there).
-    void logLoadedModules() {
-        HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetCurrentProcessId());
-        if (snapshot == INVALID_HANDLE_VALUE) return;
-
-        MODULEENTRY32W entry {};
-        entry.dwSize = sizeof(entry);
-        if (Module32FirstW(snapshot, &entry)) {
-            do {
-                Logger::Info("[Modules] {} base {:#x} size {:#x}", util::WStrToStr(entry.szModule),
-                             reinterpret_cast<uintptr_t>(entry.modBaseAddr), static_cast<uintptr_t>(entry.modBaseSize));
-            } while (Module32NextW(snapshot, &entry));
-        }
-        CloseHandle(snapshot);
-    }
-
     alignas(Eventing) char eventing[sizeof(Eventing)] = {};
     alignas(Latite) char latiteBuf[sizeof(Latite)] = {};
     alignas(Renderer) char rendererBuf[sizeof(Renderer)] = {};
@@ -327,7 +308,9 @@ DWORD __stdcall startThreadImpl(HINSTANCE dll) {
         if (!entry.first->mod) continue;
         auto res = entry.first->resolve();
         if (!res) {
+#if LATITE_DEBUG
             Logger::Warn("Signature {} failed to resolve!", entry.first->name);
+#endif
             deadCount++;
         } else {
             entry.second->result = entry.first->result;
@@ -335,11 +318,9 @@ DWORD __stdcall startThreadImpl(HINSTANCE dll) {
             sigCount++;
         }
     }
+#if LATITE_DEBUG
     Logger::Info("Resolved {} signatures ({} dead)", sigCount, deadCount);
-    if (sigCount == 0 && deadCount > 0) {
-        Logger::Warn("No signature could be found. This game version probably isn't supported.");
-        logLoadedModules();
-    }
+#endif
 
     MH_Initialize();
     new (hooks) LatiteHooks();
@@ -620,10 +601,7 @@ void Latite::threadsafeInit() {
     Latite::getPluginManager().loadPrerunScripts();
     Logger::Info("Loaded startup scripts");
 
-    input_fallback::install();
-    Logger::Info("[Trace] threadsafeInit: applying module config");
     Latite::getConfigManager().applyModuleConfig();
-    Logger::Info("[Trace] threadsafeInit: module config applied");
 
     Latite::getRenderer().setShouldInit();
 
@@ -632,7 +610,6 @@ void Latite::threadsafeInit() {
     Latite::getNotifications().push(
         util::FormatWString(LocalizeString::get("client.intro.menubutton"),
                             { util::StrToWStr(util::KeyToString(Latite::get().getMenuKey().value)) }));
-    Logger::Info("[Trace] threadsafeInit: done");
 }
 
 static void setModuleBlocked(std::string_view moduleName, bool shouldBlock) {

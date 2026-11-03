@@ -1,7 +1,5 @@
 #include "pch.h"
 #include "GeneralHooks.h"
-#include "util/InputFallback.h"
-#include "util/Rtti.h"
 #include "client/Latite.h"
 #include "client/misc/ClientMessageQueue.h"
 #include "client/feature/command/commandmanager.h"
@@ -45,7 +43,6 @@ namespace {
 }
 
 void GenericHooks::MultiPlayerLevel__subTick(SDK::Level* level) {
-    LATITE_TRACE_HOOK("GenericHooks::MultiPlayerLevel__subTick");
     TickEvent ev(level);
     Latite::getEventing().dispatch(ev);
     Latite::getClientMessageQueue().doPrint(100);
@@ -57,25 +54,6 @@ void GenericHooks::MultiPlayerLevel__subTick(SDK::Level* level) {
 }
 
 void* GenericHooks::ChatScreenController_sendChatMessage(void* controller, std::string& message) {
-#ifdef LATITE_DEBUG
-    {
-        static int logged = 0;
-        if (logged++ < 20) {
-            uint64_t raw[4] = {};
-            const bool readable = rtti::readBytes(&message, raw, sizeof(raw));
-            if (readable && raw[2] <= raw[3] && raw[3] < 0x100000) {
-                Logger::Info("[Chat] sendChatMessage called: controller=0x{:X} message=\"{}\" prefix=\"{}\"",
-                             reinterpret_cast<uintptr_t>(controller), message.substr(0, 80),
-                             Latite::getCommandManager().prefix);
-            } else {
-                Logger::Warn("[Chat] sendChatMessage called, but the 2nd argument is not a std::string: "
-                             "{:X} {:X} {:X} {:X}",
-                             raw[0], raw[1], raw[2], raw[3]);
-            }
-        }
-    }
-#endif
-    LATITE_TRACE_HOOK("GenericHooks::ChatScreenController_sendChatMessage");
     if (message.starts_with(Latite::getCommandManager().prefix)) {
         Latite::getCommandManager().runCommand(message);
         return 0;
@@ -96,7 +74,6 @@ void* GenericHooks::ChatScreenController_sendChatMessage(void* controller, std::
 }
 
 void* GenericHooks::GameRenderer_renderCurrentFrame(void* rend) {
-    LATITE_TRACE_HOOK("GenericHooks::GameRenderer_renderCurrentFrame");
     // this causes the jitter bug
     //{
     //	RenderGameEvent ev{};
@@ -108,7 +85,6 @@ void* GenericHooks::GameRenderer_renderCurrentFrame(void* rend) {
 
 LRESULT GenericHooks::MainWindow__windowProcCallback(HWND hwnd, UINT msg, WPARAM wParam,
                                                      LPARAM lParam) { // Name from China
-    LATITE_TRACE_HOOK("GenericHooks::MainWindow__windowProcCallback");
     if (msg == WM_SETCURSOR) {
         std::optional<std::reference_wrapper<Screen>> activeScreen = Latite::get().getScreenManager().getActiveScreen();
         SDK::GameCore* gameCore = SDK::GameCore::get();
@@ -126,8 +102,6 @@ LRESULT GenericHooks::MainWindow__windowProcCallback(HWND hwnd, UINT msg, WPARAM
     // They are treated like normal keys here, otherwise Alt can never be bound to anything (Freelook, for example).
     const bool isSystemKey = msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP;
     if (msg == WM_KEYDOWN || msg == WM_KEYUP || isSystemKey) {
-        LATITE_TRACE_HOOK("windowProc hook: first key message");
-        input_fallback::mainHookSawKey.store(true);
         const int key = wParam & 0xFF;
         const bool isDown = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
 
@@ -167,7 +141,6 @@ LRESULT GenericHooks::MainWindow__windowProcCallback(HWND hwnd, UINT msg, WPARAM
 }
 
 bool GenericHooks::GameCore_handleMouseInput(void* a1, void* a2, void* a3) { // Made up name
-    LATITE_TRACE_HOOK("GenericHooks::GameCore_handleMouseInput");
     const auto res = GameCore_handleMouseInputHook->oFunc<decltype(&GameCore_handleMouseInput)>()(a1, a2, a3);
 
     const auto mouse = SDK::MouseDevice::get();
@@ -178,8 +151,6 @@ bool GenericHooks::GameCore_handleMouseInput(void* a1, void* a2, void* a3) { // 
 
         const auto button = start.action;
         const auto state = start.data;
-        if (button == 4) input_fallback::mainHookSawWheel = true;
-        else if (button > 0) input_fallback::mainHookSawButton = true;
 
         if (button > 0) {
             Vec2& mousePos = SDK::ClientInstance::get()->cursorPos;
@@ -224,7 +195,6 @@ bool GenericHooks::GameCore_handleMouseInput(void* a1, void* a2, void* a3) { // 
 }
 
 BOOL __stdcall GenericHooks::hkLoadLibraryW(LPCWSTR lib) {
-    LATITE_TRACE_HOOK("GenericHooks::hkLoadLibraryW");
     // prevent double injections
 #ifdef LATITE_BETA
     abort();
@@ -233,7 +203,6 @@ BOOL __stdcall GenericHooks::hkLoadLibraryW(LPCWSTR lib) {
 }
 
 int __fastcall GenericHooks::RakPeer_getAveragePing(void* obj, char* guidOrAddy) {
-    LATITE_TRACE_HOOK("GenericHooks::RakPeer_getAveragePing");
     int ping = AveragePingHook->oFunc<decltype(&RakPeer_getAveragePing)>()(obj, guidOrAddy);
     AveragePingEvent ev { ping };
     Eventing::get().dispatch(ev);
@@ -241,8 +210,6 @@ int __fastcall GenericHooks::RakPeer_getAveragePing(void* obj, char* guidOrAddy)
 }
 
 void __fastcall GenericHooks::LocalPlayer_applyTurnDelta(void* obj, Vec2& rot) {
-    LATITE_TRACE_HOOK("GenericHooks::LocalPlayer_applyTurnDelta");
-    SDK::ClientInstance::calibrateLocalPlayer(obj);
     TurnDeltaEvent turnEvent { rot };
     Eventing::get().dispatch(turnEvent);
 
@@ -314,7 +281,6 @@ void GenericHooks::ClientInputUpdateSystemInternal_tickUpdateClientInput(uintptr
 }
 
 void __fastcall GenericHooks::CameraViewBob(void* a, void* b, void* c) {
-    LATITE_TRACE_HOOK("GenericHooks::CameraViewBob");
     BobMovementEvent ev {};
     if (Eventing::get().dispatch(ev)) {
         return;
@@ -335,7 +301,6 @@ bool GenericHooks::Level_initialize(SDK::Level* obj, void* palette, void* settin
 }
 
 void* GenericHooks::Level_startLeaveGame(SDK::Level* obj) {
-    LATITE_TRACE_HOOK("GenericHooks::Level_startLeaveGame");
     if (obj->isClientSide()) {
         PluginManager::Event ev { L"leave-game", {}, false };
         Latite::getPluginManager().dispatchEvent(ev);
@@ -384,7 +349,6 @@ void* GenericHooks::hkRenderGuiItemNew(void* obj, SDK::BaseActorRenderContext* b
 }
 
 float GenericHooks::hkGetTimeOfDay(SDK::Dimension* obj, int time, float a) {
-    LATITE_TRACE_HOOK("GenericHooks::hkGetTimeOfDay");
     auto o = GetTimeOfDayHook->oFunc<decltype(&hkGetTimeOfDay)>()(obj, time, a);
     GetTimeEvent ev { o };
     Eventing::get().dispatch(ev);
@@ -393,7 +357,6 @@ float GenericHooks::hkGetTimeOfDay(SDK::Dimension* obj, int time, float a) {
 }
 
 void GenericHooks::hkDimensionTick(SDK::Dimension* obj) {
-    LATITE_TRACE_HOOK("GenericHooks::hkDimensionTick");
     WeatherEvent ev {};
     Eventing::get().dispatch(ev);
 
@@ -405,7 +368,6 @@ void GenericHooks::hkDimensionTick(SDK::Dimension* obj) {
 }
 
 Color* GenericHooks::hkGetFogColor(SDK::Dimension* obj, Color* out, SDK::Actor* ent, float f) {
-    LATITE_TRACE_HOOK("GenericHooks::hkGetFogColor");
     FogColorHook->oFunc<decltype(&hkGetFogColor)>()(obj, out, ent, f);
 
     FogColorEvent ev { out };
@@ -415,7 +377,6 @@ Color* GenericHooks::hkGetFogColor(SDK::Dimension* obj, Color* out, SDK::Actor* 
 }
 
 SDK::GuiMessage& GenericHooks::hkAddMessage(void* obj, SDK::GuiMessage& msg) {
-    LATITE_TRACE_HOOK("GenericHooks::hkAddMessage");
     // MessageContext
     std::string& str = msg.message;
 
@@ -428,7 +389,6 @@ SDK::GuiMessage& GenericHooks::hkAddMessage(void* obj, SDK::GuiMessage& msg) {
 }
 
 void GenericHooks::hkUpdatePlayer(SDK::CameraComponent* obj, void* a, void* b) {
-    LATITE_TRACE_HOOK("GenericHooks::hkUpdatePlayer");
     UpdatePlayerCameraEvent ev {};
     Eventing::get().dispatch(ev);
 
@@ -445,7 +405,6 @@ void GenericHooks::hkUpdatePlayer(SDK::CameraComponent* obj, void* a, void* b) {
 }
 
 void GenericHooks::hkOnUri(void* obj, void* pUri) {
-    LATITE_TRACE_HOOK("GenericHooks::hkOnUri");
     struct ActivationUri {
         std::string verb;
         std::unordered_map<std::string, std::string> arguments;
@@ -470,7 +429,6 @@ void GenericHooks::hkOnUri(void* obj, void* pUri) {
 }
 
 void GenericHooks::hkGrabCursor(SDK::ClientInstance* obj) {
-    LATITE_TRACE_HOOK("GenericHooks::hkGrabCursor");
     if (Latite::get().getScreenManager().getActiveScreen()) return;
     GrabCursorHook->oFunc<decltype(&hkGrabCursor)>()(obj);
 }
@@ -490,7 +448,6 @@ void GenericHooks::hkBaseActorRenderer_renderText(void* screenContext, void* vie
 }
 
 void GenericHooks::hkAppPlatformGDK_releaseMouse(void* _this) {
-    LATITE_TRACE_HOOK("GenericHooks::hkAppPlatformGDK_releaseMouse");
     AppPlatformGDK_releaseMouseHook->oFunc<decltype(&hkAppPlatformGDK_releaseMouse)>()(_this);
 
     SetCursor(LoadCursorW(nullptr, IDC_ARROW));
