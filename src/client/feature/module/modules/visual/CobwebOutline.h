@@ -34,6 +34,12 @@ private:
     ValueType thickness = FloatValue(0.0625f); // In blocks. 1/16, like the Java pack.
     ValueType range = FloatValue(12.f);
     ValueType maxOutlines = FloatValue(300.f); // Only this many cobwebs (the nearest) are drawn.
+    ValueType onlyInView = BoolValue(true);    // Skip the cobwebs that are behind you or off to the side.
+    ValueType viewAngle = FloatValue(120.f);   // Width of the view cone, in degrees.
+
+    // Fills `visible` with the indexes of the webs that can be on screen (all of them when the option is off).
+    void pickVisible(Vec3 const& eye, Vec2 const& rot);
+    std::vector<uint32_t> visible;
 
     // The cobwebs of the last finished search, nearest first up to the limit, and for each the faces that get a frame:
     // bit (axis * 2 + side). Where two cobwebs touch, the face between them is drawn once, not twice.

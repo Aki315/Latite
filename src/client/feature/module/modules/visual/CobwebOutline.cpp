@@ -89,6 +89,12 @@ CobwebOutline::CobwebOutline()
                      LocalizeString::get("client.module.cobwebOutline.maxOutlines.desc"), maxOutlines, FloatValue(25.f),
                      FloatValue(1500.f), FloatValue(25.f));
 
+    addSetting("onlyInView", LocalizeString::get("client.module.cobwebOutline.onlyInView.name"),
+               LocalizeString::get("client.module.cobwebOutline.onlyInView.desc"), onlyInView);
+    addSliderSetting("viewAngle", LocalizeString::get("client.module.cobwebOutline.viewAngle.name"),
+                     LocalizeString::get("client.module.cobwebOutline.viewAngle.desc"), viewAngle, FloatValue(60.f),
+                     FloatValue(180.f), FloatValue(5.f), "onlyInView"_istrue);
+
     Eventing::get().listen<RenderLevelEvent, &CobwebOutline::onRenderLevel>(this);
 }
 
@@ -177,6 +183,38 @@ void CobwebOutline::finishScan() {
     scanning = false;
 }
 
+// Keeps only the cobwebs inside the cone you are looking through. A cobweb is a cube, so the cone is widened by the
+// angle the cube covers at its distance, and a cobweb right next to you is always kept (it covers most of the view).
+void CobwebOutline::pickVisible(Vec3 const& eye, Vec2 const& rot) {
+    visible.clear();
+    visible.reserve(webs.size());
+    if (!std::get<BoolValue>(onlyInView)) {
+        for (uint32_t i = 0; i < webs.size(); ++i) visible.push_back(i);
+        return;
+    }
+
+    constexpr float deg2rad = 3.14159265f / 180.f;
+    const float yaw = (rot.y + 90.f) * deg2rad;
+    const float pitch = rot.x * -deg2rad;
+    const Vec3 dir { std::cos(yaw) * std::cos(pitch), std::sin(pitch), std::sin(yaw) * std::cos(pitch) };
+    const float halfCone = std::get<FloatValue>(viewAngle).value * 0.5f * deg2rad;
+
+    for (uint32_t i = 0; i < webs.size(); ++i) {
+        const BlockPos& bp = webs[i];
+        const Vec3 d { bp.x + 0.5f - eye.x, bp.y + 0.5f - eye.y, bp.z + 0.5f - eye.z };
+        const float dist = d.magnitude();
+        if (dist < 2.5f) {
+            visible.push_back(i);
+            continue;
+        }
+        const float cosAngle = (d.x * dir.x + d.y * dir.y + d.z * dir.z) / dist;
+        // Half the angle the cube covers as seen from here (its corners are 0.87 blocks from its center).
+        const float margin = std::asin(std::min(1.f, 0.87f / dist));
+        const float limit = halfCone + margin;
+        if (limit >= 3.14159265f || cosAngle >= std::cos(limit)) visible.push_back(i);
+    }
+}
+
 void CobwebOutline::onRenderLevel(RenderLevelEvent& event) {
     auto* ci = SDK::ClientInstance::get();
     if (!ci || !ci->getLocalPlayer() || !ci->getRegion()) {
@@ -208,13 +246,17 @@ void CobwebOutline::onRenderLevel(RenderLevelEvent& event) {
 
     if (webs.empty()) return;
 
+    pickVisible(ci->getLocalPlayer()->getPos(), ci->getLocalPlayer()->getRot());
+    if (visible.empty()) return;
+
     auto color = std::get<ColorValue>(outlineColor).getMainColor();
 
     if (style.getSelectedKey() == StyleLines) {
         auto dc = MCDrawUtil3D(ci->levelRenderer, SDK::ScreenContext::instance3d,
                                SDK::MaterialPtr::getSelectionBoxMaterial());
         constexpr float grow = 0.002f;
-        for (auto const& bp : webs) {
+        for (uint32_t i : visible) {
+            const BlockPos& bp = webs[i];
             AABB bb(Vec3(bp.x - grow, bp.y - grow, bp.z - grow),
                     Vec3(bp.x + 1.f + grow, bp.y + 1.f + grow, bp.z + 1.f + grow));
             dc.drawBox(bb, color);
@@ -234,7 +276,7 @@ void CobwebOutline::onRenderLevel(RenderLevelEvent& event) {
     for (auto const& face : quads) {
         shadedColors.emplace_back(color.r * face.shade, color.g * face.shade, color.b * face.shade, color.a);
     }
-    for (size_t i = 0; i < webs.size(); ++i) {
+    for (uint32_t i : visible) {
         const BlockPos& bp = webs[i];
         const uint8_t mask = faceMask[i];
         const Vec3 origin { static_cast<float>(bp.x), static_cast<float>(bp.y), static_cast<float>(bp.z) };
