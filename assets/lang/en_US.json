@@ -637,6 +637,8 @@
         "client.module.containerLogger.logClose.desc": "Prints a line when a container is closed.",
         "client.module.containerLogger.logContents.name": "Log Container Contents",
         "client.module.containerLogger.logContents.desc": "Prints the items of a container when the server sends them (some servers include an item list in the block data). Not every update has one, and nothing is printed when it doesn't.",
+        "client.module.containerLogger.logUnloaded.name": "Log Unloaded Chunks",
+        "client.module.containerLogger.logUnloaded.desc": "Also logs chests and shulker boxes in places your game has not loaded (the server can send these from farther away than your render distance). Your game can't tell what block it is there, so the type is shown as Unknown. Pistons and bells are skipped by the open/closed value, but one can occasionally slip through.",
         "client.module.containerLogger.showType.name": "Show Container Type",
         "client.module.containerLogger.showType.desc": "Adds a line with the type of container (Chest, Shulker Box, Furnace...).",
         "client.module.containerLogger.showCoords.name": "Show Coordinates",

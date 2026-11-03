@@ -364,6 +364,8 @@ ContainerLogger::ContainerLogger()
                LocalizeString::get("client.module.containerLogger.logClose.desc"), logClose);
     addSetting("logContents", LocalizeString::get("client.module.containerLogger.logContents.name"),
                LocalizeString::get("client.module.containerLogger.logContents.desc"), logContents);
+    addSetting("logUnloaded", LocalizeString::get("client.module.containerLogger.logUnloaded.name"),
+               LocalizeString::get("client.module.containerLogger.logUnloaded.desc"), logUnloaded);
     addSetting("showType", LocalizeString::get("client.module.containerLogger.showType.name"),
                LocalizeString::get("client.module.containerLogger.showType.desc"), showType);
     addSetting("showCoords", LocalizeString::get("client.module.containerLogger.showCoords.name"),
@@ -474,11 +476,32 @@ void ContainerLogger::handleBlockEvent(SDK::Packet* pkt) {
 
     // Block events are also used by pistons, bells, note blocks and more. Only a container block counts, and the
     // client's own copy of the world says which block this is.
+    //
+    // The server sends block events for chunks you may not have loaded yourself (its range can be bigger than your render
+    // distance, or the area is kept loaded with a ticking area). There your game has no block (air, or nothing), so it
+    // can't say what the block is. Such an event is only a container if it looks like one: type 1 with data 0 or 1 (1 =
+    // somebody has it open, 0 = closed; pistons and bells send other values). It is logged as unverified, and the
+    // "Log Unloaded Chunks" setting turns that off.
     const std::string blockId = blockIdAt(raw.x, raw.y, raw.z);
+    const bool unloaded = blockId.empty() || stripNamespace(blockId) == "air";
     ContainerInfo info {};
-    if (raw.type != kChestEventType || blockId.empty() || !containerFromBlock(blockId, info) || !info.animated) {
+    const char* source = "block event (anyone nearby)";
+    if (raw.type != kChestEventType) {
         debugLine(std::format("block event at {} {} {} ignored: type {}, data {}, block '{}'", raw.x, raw.y, raw.z,
                               raw.type, raw.data, blockId.empty() ? "unknown" : blockId));
+        return;
+    }
+    if (unloaded) {
+        if (!std::get<BoolValue>(logUnloaded) || raw.data > 1) {
+            debugLine(std::format("block event at {} {} {} ignored: chunk not loaded on your side, type {}, data {}",
+                                  raw.x, raw.y, raw.z, raw.type, raw.data));
+            return;
+        }
+        info = { "Unknown (chunk not loaded on your side, probably a chest or shulker box)", true };
+        source = "block event, block unknown because the chunk isn't loaded for you (unverified)";
+    } else if (!containerFromBlock(blockId, info) || !info.animated) {
+        debugLine(std::format("block event at {} {} {} ignored: type {}, data {}, block '{}'", raw.x, raw.y, raw.z,
+                              raw.type, raw.data, blockId));
         return;
     }
 
@@ -501,7 +524,7 @@ void ContainerLogger::handleBlockEvent(SDK::Packet* pkt) {
     const auto local = recent.find(key);
     if (local != recent.end() && now - local->second < std::chrono::seconds(2)) return; // Already logged from your window.
 
-    report(nowOpen ? Kind::Opened : Kind::Closed, { raw.x, raw.y, raw.z }, info.name, "block event (anyone nearby)");
+    report(nowOpen ? Kind::Opened : Kind::Closed, { raw.x, raw.y, raw.z }, info.name, source);
 }
 
 void ContainerLogger::handleContainerOpen(SDK::Packet* pkt) {

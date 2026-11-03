@@ -68,6 +68,7 @@ private:
     ValueType logOpen = BoolValue(true);
     ValueType logClose = BoolValue(true);
     ValueType logContents = BoolValue(false);
+    ValueType logUnloaded = BoolValue(true); // Also log chests/shulker boxes in chunks your game hasn't loaded.
     ValueType showType = BoolValue(true);
     ValueType showCoords = BoolValue(true);
     ValueType showTime = BoolValue(true);
