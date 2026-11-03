@@ -7,6 +7,7 @@
 #include "mc/common/client/game/ClientInstance.h"
 #include "mc/common/nbt/Tag.h"
 #include "mc/common/network/Packet.h"
+#include "mc/common/world/Item.h"
 #include "mc/common/world/level/Dimension.h"
 #include "mc/common/world/actor/Actor.h"
 #include "mc/common/world/actor/player/Player.h"
@@ -67,6 +68,8 @@ namespace {
             return false;
         }
     }
+
+    bool rawPlausible(uintptr_t p) { return p >= 0x10000 && p < 0x00007FFFFFFFFFFFull; }
 
     bool plausiblePos(int x, int y, int z) {
         return std::abs(x) < 30000000 && std::abs(z) < 30000000 && y >= -2048 && y <= 4096;
@@ -148,6 +151,7 @@ namespace {
         else if (id == "trapped_chest") out = { "Trapped Chest", true };
         else if (id == "ender_chest") out = { "Ender Chest", true };
         else if (id.ends_with("shulker_box")) out = { "Shulker Box", true };
+        else if (id.ends_with("copper_chest")) out = { "Copper Chest", true }; // also exposed_, weathered_, oxidized_, waxed_
         else if (id == "barrel") out = { "Barrel", false };
         else if (id == "hopper") out = { "Hopper", false };
         else if (id == "furnace" || id == "lit_furnace") out = { "Furnace", false };
@@ -204,6 +208,80 @@ namespace {
             return true;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             return false;
+        }
+    }
+
+    bool readBytes(const void* from, void* to, size_t count) {
+        __try {
+            std::memcpy(to, from, count);
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
+    bool looksLikeGameObject(const void* p);
+
+    // Reads the id of something that might be an Item ("minecraft:totem_of_undying"). False when it is anything else.
+    void itemNameInner(uintptr_t p, char* out, size_t size) {
+        auto* item = reinterpret_cast<SDK::Item*>(p);
+        const std::string s = item->namespacedId.getString();
+        if (s.size() < 3 || s.size() >= size) return;
+        for (char c : s) {
+            if (!(std::islower(static_cast<unsigned char>(c)) || std::isdigit(static_cast<unsigned char>(c)) || c == '_' ||
+                  c == ':' || c == '.'))
+                return;
+        }
+        if (s.find(':') == std::string::npos) return;
+        std::memcpy(out, s.c_str(), s.size() + 1);
+    }
+
+    bool itemNameRaw(uintptr_t p, char* out, size_t size) {
+        __try {
+            itemNameInner(p, out, size);
+            return out[0] != '\0';
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
+    // Debug aid for the contents packets (InventoryContent/InventorySlot). They carry a list of item descriptors whose
+    // layout isn't known here. This finds the lists in the packet and, inside each, every pointer that is an Item, and
+    // logs where they sit: the distance between them is the size of one slot, and the bytes around them show where the
+    // count is. Nothing is decoded from this; it only writes to the log.
+    void probeItemList(const void* packet, int id) {
+        constexpr size_t kHead = 0x100;
+        uintptr_t head[kHead / 8] = {};
+        if (!readBytes(packet, head, sizeof(head))) return;
+        for (size_t i = 6; i + 2 < kHead / 8; ++i) {
+            const uintptr_t begin = head[i], end = head[i + 1], cap = head[i + 2];
+            if (!rawPlausible(begin) || end <= begin || end - begin > 0x40000 || ((end - begin) & 7) || cap < end ||
+                cap - begin > 0x80000)
+                continue;
+            const size_t bytes = end - begin;
+            std::vector<uint8_t> region(bytes);
+            if (!readBytes(reinterpret_cast<void*>(begin), region.data(), bytes)) continue;
+            Logger::Info("[ContainerLogger] packet {}: list at +0x{:X}, {} bytes", id, i * 8, bytes);
+            int hits = 0;
+            for (size_t off = 0; off + 8 <= bytes && hits < 40; off += 8) {
+                uintptr_t value = 0;
+                std::memcpy(&value, region.data() + off, 8);
+                if (!rawPlausible(value) || !looksLikeGameObject(reinterpret_cast<void*>(value))) continue;
+                char name[96] = {};
+                if (!itemNameRaw(value, name, sizeof(name))) continue;
+                ++hits;
+                Logger::Info("[ContainerLogger]   item pointer at list+0x{:X}: {}", off, name);
+                if (hits <= 3) {
+                    const size_t from = off >= 0x20 ? off - 0x20 : 0;
+                    std::string hex;
+                    for (size_t b = from; b < std::min(bytes, from + 0x60); ++b) {
+                        if (((b - from) % 16) == 0) hex += std::format("\n    list+0x{:X}:", b);
+                        hex += std::format(" {:02X}", region[b]);
+                    }
+                    Logger::Info("[ContainerLogger]   bytes around it:{}", hex);
+                }
+            }
+            if (!hits) Logger::Info("[ContainerLogger]   no item pointers in that list");
         }
     }
 
@@ -378,6 +456,7 @@ void ContainerLogger::debugDump(SDK::Packet* pkt, uint8_t id) {
         for (size_t i = row; i < row + 16; ++i) hex += std::format(" {:02X}", bytes[i]);
     }
     Logger::Info("[ContainerLogger] packet {} raw bytes:{}", static_cast<int>(id), hex);
+    if ((id == kInventoryContent || id == kInventorySlot) && count <= 3) probeItemList(pkt, id);
 }
 
 void ContainerLogger::handleBlockEvent(SDK::Packet* pkt) {
