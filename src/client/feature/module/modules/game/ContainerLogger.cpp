@@ -7,7 +7,7 @@
 #include "mc/common/client/game/ClientInstance.h"
 #include "mc/common/nbt/Tag.h"
 #include "mc/common/network/Packet.h"
-#include "mc/common/world/Dimension.h"
+#include "mc/common/world/level/Dimension.h"
 #include "mc/common/world/actor/Actor.h"
 #include "mc/common/world/actor/player/Player.h"
 #include "mc/common/world/level/BlockSource.h"
