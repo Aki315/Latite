@@ -379,6 +379,8 @@
         "client.hudmodule.targetHud.textColor.desc": "The color of the name.",
         "client.hudmodule.targetHud.backgroundColor.name": "Background Color",
         "client.hudmodule.targetHud.backgroundColor.desc": "The color of the panel behind everything.",
+        "client.hudmodule.targetHud.backgroundOpacity.name": "Background Opacity",
+        "client.hudmodule.targetHud.backgroundOpacity.desc": "How solid the panel is. Lower it if the Target HUD looks too dark; 0 hides the panel and leaves only the contents.",
         "client.hudmodule.waila.name": "WAILA",
         "client.hudmodule.waila.desc": "What Am I Looking At: Displays information on the block or entity you are looking at. Heavily inspired by WTHIT, made by deirn",
         "client.hudmodule.waila.showBlocks.name": "Blocks",

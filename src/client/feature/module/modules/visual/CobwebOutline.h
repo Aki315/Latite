@@ -18,6 +18,8 @@ public:
     ~CobwebOutline() override = default;
 
     void onRenderLevel(RenderLevelEvent& event);
+    void onBlockChangePacket(Event& event);
+    void onClick(Event& event);
 
 private:
     static constexpr int StyleFrame = 0; // The Java look: a frame on each of the six faces.
@@ -46,6 +48,7 @@ private:
     std::vector<BlockPos> webs;
     std::vector<uint8_t> faceMask;
     bool hasScanned = false;
+    bool dirty = false; // A block changed (packet or click): search again soon.
     int lastRadius = 0;
     BlockPos lastCenter { 0, 0, 0 };
     std::chrono::steady_clock::time_point lastScanDone {};

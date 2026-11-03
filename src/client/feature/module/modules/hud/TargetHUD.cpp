@@ -979,6 +979,9 @@ TargetHUD::TargetHUD()
                LocalizeString::get("client.hudmodule.targetHud.textColor.desc"), textColor);
     addSetting("backgroundColor", LocalizeString::get("client.hudmodule.targetHud.backgroundColor.name"),
                LocalizeString::get("client.hudmodule.targetHud.backgroundColor.desc"), backgroundColor);
+    addSliderSetting("backgroundOpacity", LocalizeString::get("client.hudmodule.targetHud.backgroundOpacity.name"),
+                     LocalizeString::get("client.hudmodule.targetHud.backgroundOpacity.desc"), backgroundOpacity,
+                     FloatValue(0.f), FloatValue(1.f), FloatValue(0.05f));
 
     rect = { 0.f, 0.f, 260.f, 80.f };
 
@@ -1175,6 +1178,7 @@ void TargetHUD::render(DrawUtil& dc, bool isDefault, bool inEditor) {
     f.labelSize = f.textSize * 0.6f * f.itemScale;
 
     f.bg = d2d::Color(std::get<ColorValue>(backgroundColor).getMainColor());
+    f.bg.a *= std::clamp(std::get<FloatValue>(backgroundOpacity).value, 0.f, 1.f);
     f.text = d2d::Color(std::get<ColorValue>(textColor).getMainColor());
     f.dim = d2d::Color::RGB(150, 158, 175);
     f.gold = d2d::Color::RGB(247, 190, 25);

@@ -2,7 +2,10 @@
 #include "CobwebOutline.h"
 
 #include <util/DrawUtil3D.h>
+#include "client/event/events/ClickEvent.h"
+#include "client/event/events/PacketReceiveEvent.h"
 #include "mc/common/client/game/ClientInstance.h"
+#include "mc/common/network/Packet.h"
 #include "mc/common/client/renderer/MaterialPtr.h"
 #include "mc/common/world/level/BlockSource.h"
 #include "mc/common/world/level/block/Block.h"
@@ -65,7 +68,14 @@ namespace {
                static_cast<uint64_t>(y + 1024);
     }
 
-    constexpr size_t kBlocksPerFrame = 6000;
+    // The search works for at most this long each frame (checked every few blocks), however big the range is. It is
+    // time, not a block count, so a slow computer doesn't stutter and a fast one finishes in fewer frames.
+    constexpr std::chrono::microseconds kScanBudget { 900 };
+    constexpr size_t kTimeCheckEvery = 128;
+
+    // Packets that mean a block (or a whole chunk) changed: UpdateBlock 21, LevelChunk 58, UpdateBlockSynced 110,
+    // UpdateSubChunkBlocks 172. Any of them only asks for an early search, so a wrong id costs one extra search.
+    bool isBlockChangePacket(uint8_t id) { return id == 21 || id == 58 || id == 110 || id == 172; }
 } // namespace
 
 CobwebOutline::CobwebOutline()
@@ -96,6 +106,22 @@ CobwebOutline::CobwebOutline()
                      FloatValue(180.f), FloatValue(5.f), "onlyInView"_istrue);
 
     Eventing::get().listen<RenderLevelEvent, &CobwebOutline::onRenderLevel>(this);
+    // A block that changes (a web placed or broken, by you or anyone else) asks for an early search instead of waiting for
+    // the next timed one: this is what made new webs show up late.
+    listen<PacketReceiveEvent>((EventListenerFunc)&CobwebOutline::onBlockChangePacket);
+    listen<ClickEvent>((EventListenerFunc)&CobwebOutline::onClick);
+}
+
+void CobwebOutline::onBlockChangePacket(Event& evG) {
+    auto& ev = reinterpret_cast<PacketReceiveEvent&>(evG);
+    auto* pkt = ev.getPacket();
+    if (pkt && isBlockChangePacket(static_cast<uint8_t>(pkt->getID()))) dirty = true;
+}
+
+// You place or break a block on your own screen before the server confirms it.
+void CobwebOutline::onClick(Event& evG) {
+    auto& ev = reinterpret_cast<ClickEvent&>(evG);
+    if (ev.isDown() && ev.getClickType() != ClickEvent::ClickType::Wheel) dirty = true;
 }
 
 void CobwebOutline::startScan(int radius, BlockPos center) {
@@ -118,9 +144,14 @@ void CobwebOutline::stepScan() {
 
     const size_t side = static_cast<size_t>(scanRadius) * 2 + 1;
     const size_t total = side * side * side;
-    size_t budget = kBlocksPerFrame;
+    const auto deadline = std::chrono::steady_clock::now() + kScanBudget;
+    size_t sinceCheck = 0;
 
-    while (scanIndex < total && budget-- > 0) {
+    while (scanIndex < total) {
+        if (++sinceCheck >= kTimeCheckEvery) {
+            sinceCheck = 0;
+            if (std::chrono::steady_clock::now() >= deadline) break;
+        }
         const size_t index = scanIndex++;
         const int dx = static_cast<int>(index % side) - scanRadius;
         const int dy = static_cast<int>((index / side) % side) - scanRadius;
@@ -228,17 +259,19 @@ void CobwebOutline::onRenderLevel(RenderLevelEvent& event) {
 
     const int radius = static_cast<int>(std::get<FloatValue>(range).value);
 
-    // Start a new search when none is running and it is time: you moved a couple of blocks from where the last one was
-    // centered, the range changed, or half a second has passed (webs get placed and broken).
+    // Start a new search when none is running and it is time: you moved a block from where the last one was centered, the
+    // range changed, a block changed, or a quarter of a second has passed. Searches are at least 50 ms apart.
     if (!scanning) {
         const Vec3 pos = ci->getLocalPlayer()->getPos();
         const BlockPos here { static_cast<int>(std::floor(pos.x)), static_cast<int>(std::floor(pos.y)),
                               static_cast<int>(std::floor(pos.z)) };
         const auto sinceDone = std::chrono::steady_clock::now() - lastScanDone;
-        const bool movedAway = std::abs(here.x - lastCenter.x) >= 2 || std::abs(here.y - lastCenter.y) >= 2 ||
-                               std::abs(here.z - lastCenter.z) >= 2;
-        if (!hasScanned || radius != lastRadius || (movedAway && sinceDone > std::chrono::milliseconds(100)) ||
-            sinceDone > std::chrono::milliseconds(500)) {
+        const bool movedAway = std::abs(here.x - lastCenter.x) >= 1 || std::abs(here.y - lastCenter.y) >= 1 ||
+                               std::abs(here.z - lastCenter.z) >= 1;
+        const bool early = sinceDone > std::chrono::milliseconds(50);
+        if (!hasScanned || radius != lastRadius || ((movedAway || dirty) && early) ||
+            sinceDone > std::chrono::milliseconds(250)) {
+            dirty = false;
             startScan(radius, here);
         }
     }

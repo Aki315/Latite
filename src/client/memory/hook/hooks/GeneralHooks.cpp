@@ -9,6 +9,7 @@
 #include "PlayerHooks.h"
 #include "client/event/events/MouseReleaseEvent.h"
 #include "client/screen/ScreenManager.h"
+#include "util/AltKeyFallback.h"
 #include "mc/common/client/game/GameCore.h"
 #include "mc/common/client/game/MouseDevice.h"
 
@@ -104,6 +105,7 @@ LRESULT GenericHooks::MainWindow__windowProcCallback(HWND hwnd, UINT msg, WPARAM
     if (msg == WM_KEYDOWN || msg == WM_KEYUP || isSystemKey) {
         const int key = wParam & 0xFF;
         const bool isDown = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+        if (key == VK_MENU) alt_fallback::hookSawAlt = true;
 
         // What to return when something cancelled the key. A lone Alt press that reaches Windows' default handling
         // opens the window's system menu, so a cancelled Alt is swallowed completely. Other system keys keep the

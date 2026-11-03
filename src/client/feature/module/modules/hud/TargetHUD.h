@@ -88,6 +88,7 @@ private:
     ValueType textSize = FloatValue(20.f);
     ValueType textColor = ColorValue(1.f, 1.f, 1.f, 1.f);
     ValueType backgroundColor = ColorValue(0.067f, 0.082f, 0.129f, 0.94f);
+    ValueType backgroundOpacity = FloatValue(0.6f); // Multiplies the panel's alpha; lower = see more of the game behind.
     ValueType colorByHealth = BoolValue(true);
     ValueType healthColor = ColorValue(0.2f, 0.83f, 0.4f, 1.f);
 
