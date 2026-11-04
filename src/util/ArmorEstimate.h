@@ -517,6 +517,12 @@ namespace ArmorEstimate {
         // Call once per game tick. otherHitDamage: assumed damage for hits you did not throw (0 = ignore them).
         void tick(SDK::Level* level, SDK::Actor* me, Assumptions const& assume, float otherHitDamage) {
             if (!level || !me) return;
+
+            // This is called every frame, but the guess is built for game ticks (20 a second): the "two minutes" below
+            // and the three-update check in Tracker::update both count ticks. At 144 FPS that was 7 times the work.
+            const auto frameNow = std::chrono::steady_clock::now();
+            if (frameNow - lastTick < std::chrono::milliseconds(45)) return;
+            lastTick = frameNow;
             ++counter;
 
             std::vector<uint64_t> syncs;
@@ -598,5 +604,6 @@ namespace ArmorEstimate {
         std::mutex mutex;
         std::vector<uint64_t> pendingSyncs;
         uint64_t counter = 0;
+        std::chrono::steady_clock::time_point lastTick {};
     };
 }

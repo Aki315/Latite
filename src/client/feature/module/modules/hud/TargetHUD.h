@@ -103,6 +103,11 @@ private:
     uint64_t shownFor = 0;
 
     // The damage popup: the health (plus golden hearts) last seen for the target, and the last drop.
+    // The face texture path of the current target (see gatherInfo): looking it up costs a skin hash and a disk check.
+    uint64_t faceCacheFor = 0;
+    std::string faceCachePath;
+    std::chrono::steady_clock::time_point faceCacheTime {};
+
     uint64_t damageFor = 0;
     float lastTotal = -1.f;
     float damageAmount = 0.f;

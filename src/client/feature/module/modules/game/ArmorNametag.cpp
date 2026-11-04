@@ -213,6 +213,11 @@ void ArmorNametag::onUpdate(Event&) {
     auto* localPlayer = client ? client->getLocalPlayer() : nullptr;
     if (!level || !localPlayer) return;
 
+    // Every player's tag is read, rebuilt and compared here: once per game tick is plenty, not once per frame.
+    const auto frameNow = std::chrono::steady_clock::now();
+    if (frameNow - lastUpdate < std::chrono::milliseconds(45)) return;
+    lastUpdate = frameNow;
+
     const auto mode = static_cast<DisplayMode>(durabilityDisplayMode.getSelectedKey());
     const bool estimating =
         static_cast<DurabilitySource>(durabilitySource.getSelectedKey()) == DurabilitySource::Estimated;

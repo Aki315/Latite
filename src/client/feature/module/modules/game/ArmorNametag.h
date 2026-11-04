@@ -61,4 +61,5 @@ private:
 
     // Estimated mode only: one guess per player, followed every tick (also for players out of nametag range).
     ArmorEstimate::Trackers trackers;
+    std::chrono::steady_clock::time_point lastUpdate {};
 };

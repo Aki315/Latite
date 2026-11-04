@@ -1154,7 +1154,17 @@ bool TargetHUD::gatherInfo(bool preview, TargetInfo& info) {
     auto* player = static_cast<SDK::Player*>(actor);
     info.id = actor->getRuntimeID();
     info.name = player->playerName.empty() ? L"Player" : util::StrToWStr(player->playerName);
-    info.faceTexturePath = getFaceTexturePath(player);
+    {
+        // The skin is hashed and its file checked on disk, so do it when the target changes and then only now and then.
+        const auto now = std::chrono::steady_clock::now();
+        const auto every = faceCachePath.empty() ? std::chrono::milliseconds(1000) : std::chrono::milliseconds(5000);
+        if (faceCacheFor != info.id || now - faceCacheTime > every) {
+            faceCachePath = getFaceTexturePath(player);
+            faceCacheFor = info.id;
+            faceCacheTime = now;
+        }
+        info.faceTexturePath = faceCachePath;
+    }
 
     const Vitals vitals = readVitals(actor);
     info.health = vitals.health;

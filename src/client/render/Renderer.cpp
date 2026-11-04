@@ -605,6 +605,8 @@ ComPtr<IDWriteTextLayout> Renderer::getLayout(IDWriteTextFormat* fmt, std::wstri
         return layout;
     }
 
+    // Nothing else empties this while you play, and text that keeps changing (numbers, names) adds an entry every time.
+    if (cachedLayouts.size() > 3000) cachedLayouts.clear();
     this->cachedLayouts[hash] = { fmt, layout };
     return layout;
 }
