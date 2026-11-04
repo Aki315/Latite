@@ -6,13 +6,17 @@
 #include "client/event/events/PacketReceiveEvent.h"
 #include "mc/common/client/game/ClientInstance.h"
 #include "mc/common/nbt/Tag.h"
+#include "mc/Addresses.h"
 #include "mc/common/network/Packet.h"
+#include "mc/common/world/Item.h"
+#include "mc/common/world/ItemStack.h"
 #include "mc/common/world/level/BlockSource.h"
 #include "mc/common/world/level/HitResult.h"
 #include "mc/common/world/level/block/Block.h"
 #include "mc/common/world/level/block/BlockLegacy.h"
 #include "util/Util.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <format>
@@ -107,8 +111,11 @@ VaultPredictor::VaultPredictor()
                LocalizeString::get("client.textmodule.vaultPredictor.showAmounts.desc"), showAmounts);
     addSetting("showEnchantments", LocalizeString::get("client.textmodule.vaultPredictor.showEnchantments.name"),
                LocalizeString::get("client.textmodule.vaultPredictor.showEnchantments.desc"), showEnchantments);
-    addSetting("showCoords", LocalizeString::get("client.textmodule.vaultPredictor.showCoords.name"),
-               LocalizeString::get("client.textmodule.vaultPredictor.showCoords.desc"), showCoords);
+    addSetting("showIcons", LocalizeString::get("client.textmodule.vaultPredictor.showIcons.name"),
+               LocalizeString::get("client.textmodule.vaultPredictor.showIcons.desc"), showIcons);
+    addSliderSetting("iconSize", LocalizeString::get("client.textmodule.vaultPredictor.iconSize.name"),
+                     LocalizeString::get("client.textmodule.vaultPredictor.iconSize.desc"), iconSize, FloatValue(8.f),
+                     FloatValue(128.f), FloatValue(2.f), "showIcons"_istrue);
     addSetting("debugMode", LocalizeString::get("client.textmodule.vaultPredictor.debugMode.name"),
                LocalizeString::get("client.textmodule.vaultPredictor.debugMode.desc"), debugMode);
 
@@ -129,6 +136,8 @@ void VaultPredictor::reset() {
     vaults.clear();
     loggedNoData.clear();
     ignoredIds.clear();
+    itemCache.clear();
+    itemCacheRegistry = nullptr;
 }
 
 void VaultPredictor::onPacketReceive(Event& evG) {
@@ -176,16 +185,16 @@ void VaultPredictor::handleBlockActorData(SDK::Packet* pkt) {
             const std::string id = out.mStr.substr(0, 60);
             std::lock_guard lock(mutex);
             if (ignoredIds.size() < 20 && ignoredIds.insert(id).second) {
-                Logger::Info("[VaultPredictor] block entity data at {} {} {} (not a vault): {}", x, y, z, id);
+                Logger::Info("[VaultPredictor] block entity data (not a vault): {}", id);
             }
         }
         return;
     }
 
     if (std::get<BoolValue>(debugMode)) {
-        Logger::Info("[VaultPredictor] vault data at {} {} {}:\n{}\n  -> loot table '{}', override '{}', display item {} x{}, "
+        Logger::Info("[VaultPredictor] vault data:\n{}\n  -> loot table '{}', override '{}', display item {} x{}, "
                      "items_to_eject field {} with {} item(s)",
-                     x, y, z, out.mStr.substr(0, 2500), data.lootTable, data.overrideLootTable,
+                     out.mStr.substr(0, 2500), data.lootTable, data.overrideLootTable,
                      data.hasDisplay ? data.display.name : std::string("none"), data.hasDisplay ? data.display.count : 0,
                      data.hasEjectField ? "present" : "absent", data.toEject.size());
     }
@@ -204,26 +213,65 @@ void VaultPredictor::handleBlockActorData(SDK::Packet* pkt) {
     entry.seen = std::chrono::steady_clock::now();
 }
 
-void VaultPredictor::appendItem(std::wstring& out, vault_nbt::ItemInfo const& item, bool indent) {
-    const std::wstring pad = indent ? L"  " : L"";
-    std::wstring line = pad;
+void VaultPredictor::addItem(std::vector<Row>& rows, vault_nbt::ItemInfo const& item) {
+    Row row;
+    row.kind = RowKind::Item;
+    row.item = item.name;
+    row.count = item.count;
     if (std::get<BoolValue>(showNames)) {
-        line += L"\u00A7f" + util::StrToWStr(vault_nbt::prettyName(item.name)) + L"\u00A7r";
+        row.text = L"\u00A7f" + util::StrToWStr(vault_nbt::prettyName(item.name)) + L"\u00A7r";
     } else {
-        line += L"\u00A7fItem\u00A7r";
+        row.text = L"\u00A7fItem\u00A7r";
     }
-    if (std::get<BoolValue>(showAmounts)) line += L" \u00A77x" + std::to_wstring(item.count) + L"\u00A7r";
-    out += line + L"\n";
+    if (std::get<BoolValue>(showAmounts)) row.text += L" \u00A77x" + std::to_wstring(item.count) + L"\u00A7r";
+    rows.push_back(std::move(row));
 
     if (std::get<BoolValue>(showEnchantments)) {
         for (auto const& e : item.enchants) {
-            out += pad + L"  \u00A7d" + util::StrToWStr(vault_nbt::enchantName(e.id)) + L" " +
-                   util::StrToWStr(vault_nbt::roman(e.level)) + L"\u00A7r\n";
+            Row detail;
+            detail.kind = RowKind::Detail;
+            detail.text = L"\u00A7d" + util::StrToWStr(vault_nbt::enchantName(e.id)) + L" " +
+                          util::StrToWStr(vault_nbt::roman(e.level)) + L"\u00A7r";
+            rows.push_back(std::move(detail));
         }
     }
 }
 
-std::wstring VaultPredictor::buildText(bool preview) {
+void* VaultPredictor::findItemCounter(std::string const& id) {
+    auto* client = SDK::ClientInstance::get();
+    auto* level = client && client->minecraft ? client->minecraft->getLevel() : nullptr;
+    if (!level) return nullptr;
+
+    // The item registry, the same one WAILA reads its tool icons from: a list of item counters, each pointing at an Item.
+    void* registry = *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(level) + 0x198);
+    if (!registry) return nullptr;
+
+    if (registry != itemCacheRegistry || itemCache.empty()) {
+        itemCache.clear();
+        itemCacheRegistry = registry;
+        auto itemCounters = reinterpret_cast<void***>(reinterpret_cast<uintptr_t>(registry) + 0x38);
+        if (!itemCounters[0] || !itemCounters[1]) return nullptr;
+        for (auto current = itemCounters[0]; current < itemCounters[1]; ++current) {
+            auto counter = *current;
+            auto item = counter ? *reinterpret_cast<SDK::Item**>(counter) : nullptr;
+            if (!item) continue;
+            const std::string name = item->namespacedId.getString();
+            if (!name.empty()) itemCache.emplace(name, counter);
+        }
+    }
+
+    auto it = itemCache.find(id.find(':') == std::string::npos ? "minecraft:" + id : id);
+    return it == itemCache.end() ? nullptr : it->second;
+}
+
+std::vector<VaultPredictor::Row> VaultPredictor::buildRows(bool preview, SDK::Block*& block) {
+    block = nullptr;
+    std::vector<Row> rows;
+    auto header = [&](std::wstring text) {
+        Row row;
+        row.text = std::move(text);
+        rows.push_back(std::move(row));
+    };
     const int wanted = vaultType.getSelectedKey();
 
     // What the seed setting and the server's seed say.
@@ -232,37 +280,43 @@ std::wstring VaultPredictor::buildText(bool preview) {
         int64_t value = 0;
         const bool typed = parseSeed(std::get<TextValue>(seed).str, value);
         std::lock_guard lock(mutex);
-        if (typed) seedLine = L"\u00A77Seed: " + std::to_wstring(value) + L" (typed)\u00A7r\n";
-        else if (haveServerSeed) seedLine = L"\u00A77Seed: " + std::to_wstring(serverSeed) + L" (from the server)\u00A7r\n";
-        else seedLine = L"\u00A77Seed: unknown\u00A7r\n";
+        if (typed) seedLine = L"§7Seed: " + std::to_wstring(value) + L" (typed)§r";
+        else if (haveServerSeed) seedLine = L"§7Seed: " + std::to_wstring(serverSeed) + L" (from the server)§r";
+        else seedLine = L"§7Seed: unknown§r";
     }
 
-    if (preview) {
-        std::wstring out = L"\u00A76Vault Predictor\u00A7r\n\u00A7bNormal Vault\u00A7r\n";
-        if (std::get<BoolValue>(showCoords)) out += L"\u00A77" L"120  64  -120\u00A7r\n";
-        out += seedLine;
-        out += L"\u00A77Rewards sent by the server:\u00A7r\n";
-        vault_nbt::ItemInfo book;
-        book.name = "minecraft:enchanted_book";
-        book.count = 1;
-        book.enchants.push_back({ 9, 5 });
-        appendItem(out, book, true);
-        vault_nbt::ItemInfo emerald;
-        emerald.name = "minecraft:emerald";
-        emerald.count = 3;
-        appendItem(out, emerald, true);
-        out += L"\u00A78(sample)\u00A7r";
-        return out;
-    }
-
+    // The block the icons are built from: the vault in the crosshair (or any block there, for the sample).
     auto* client = SDK::ClientInstance::get();
     auto* level = client && client->minecraft ? client->minecraft->getLevel() : nullptr;
     auto* hit = level ? level->getHitResult() : nullptr;
-    if (!hit || hit->hitType != SDK::HitType::BLOCK) return {};
+    const bool aimingAtBlock = hit && hit->hitType == SDK::HitType::BLOCK;
+    if (aimingAtBlock) {
+        if (auto* region = client->getRegion()) block = region->getBlock(hit->hitBlock);
+    }
+
+    if (preview) {
+        header(L"§6Vault Predictor§r");
+        header(L"§bNormal Vault§r");
+        header(seedLine);
+        header(L"§aRewards sent by the server:§r");
+        vault_nbt::ItemInfo book;
+        book.name = "minecraft:enchanted_book";
+        book.enchants.push_back({ 9, 5 });
+        addItem(rows, book);
+        vault_nbt::ItemInfo emerald;
+        emerald.name = "minecraft:emerald";
+        emerald.count = 3;
+        addItem(rows, emerald);
+        header(L"§8(sample)§r");
+        return rows;
+    }
+
+    if (!aimingAtBlock || blockNameInner(hit->hitBlock) != "minecraft:vault") {
+        block = nullptr;
+        return rows;
+    }
 
     const BlockPos pos = hit->hitBlock;
-    if (blockNameInner(pos) != "minecraft:vault") return {};
-
     const uint64_t key = keyOf(pos.x, pos.y, pos.z);
     vault_nbt::VaultData data;
     bool known = false;
@@ -272,54 +326,127 @@ std::wstring VaultPredictor::buildText(bool preview) {
             data = it->second.data;
             known = true;
         } else if (std::get<BoolValue>(debugMode) && loggedNoData.size() < 64 && loggedNoData.insert(key).second) {
-            Logger::Info("[VaultPredictor] looking at a vault at {} {} {}: no data for it from the server yet", pos.x, pos.y,
-                         pos.z);
+            Logger::Info("[VaultPredictor] looking at a vault: no data for it from the server yet");
         }
     }
 
     // The type, from the loot table. Without data the type isn't known, and then it is shown whatever the setting says.
     const bool ominous = known && vault_nbt::isOminous(data);
     if (known && !data.lootTable.empty()) {
-        if (wanted == TypeNormal && ominous) return {};
-        if (wanted == TypeOminous && !ominous) return {};
+        if (wanted == TypeNormal && ominous) return rows;
+        if (wanted == TypeOminous && !ominous) return rows;
     }
 
-    std::wstring out = L"\u00A76Vault Predictor\u00A7r\n";
-    if (known && !data.lootTable.empty()) out += ominous ? L"\u00A75Ominous Vault\u00A7r\n" : L"\u00A7bNormal Vault\u00A7r\n";
-    else out += L"\u00A77Vault (type not received)\u00A7r\n";
-    if (std::get<BoolValue>(showCoords)) {
-        out += L"\u00A77" + std::to_wstring(pos.x) + L"  " + std::to_wstring(pos.y) + L"  " + std::to_wstring(pos.z) +
-               L"\u00A7r\n";
-    }
-    out += seedLine;
+    header(L"§6Vault Predictor§r");
+    if (known && !data.lootTable.empty()) header(ominous ? L"§5Ominous Vault§r" : L"§bNormal Vault§r");
+    else header(L"§7Vault (type not received)§r");
+    header(seedLine);
 
     if (!known) {
-        out += L"\u00A77No data from the server for this vault yet.\u00A7r";
-        return out;
+        header(L"§7No data from the server for this vault yet.§r");
+        return rows;
     }
 
     if (!data.toEject.empty()) {
-        out += L"\u00A7aRewards sent by the server:\u00A7r\n";
-        for (auto const& item : data.toEject) appendItem(out, item, true);
+        header(L"§aRewards sent by the server:§r");
+        for (auto const& item : data.toEject) addItem(rows, item);
     } else {
-        out += L"\u00A77Rewards: the server hasn't sent any for this vault.\u00A7r\n";
+        header(L"§7Rewards: the server hasn't sent any for this vault.§r");
     }
     if (data.hasDisplay) {
-        out += L"\u00A78Shown in the vault (not a reward):\u00A7r\n";
-        appendItem(out, data.display, true);
+        header(L"§8Shown in the vault (not a reward):§r");
+        addItem(rows, data.display);
     }
-    while (!out.empty() && out.back() == L'\n') out.pop_back();
-    return out;
+    return rows;
 }
 
 void VaultPredictor::render(DrawUtil& dc, bool isDefault, bool inEditor) {
-    pending = buildText(isDefault || inEditor);
-    if (pending.empty()) return; // Not looking at a (wanted) vault: nothing is drawn.
-    TextModule::render(dc, isDefault, inEditor);
-}
+    if (!dc.isMinecraft()) return;
+    auto& mc = static_cast<MCDrawUtil&>(dc);
 
-std::wstringstream VaultPredictor::text(bool, bool) {
-    std::wstringstream ss;
-    ss << pending;
-    return ss;
+    SDK::Block* block = nullptr;
+    const auto rows = buildRows(isDefault || inEditor, block);
+    if (rows.empty()) return; // Not looking at a (wanted) vault: nothing is drawn.
+
+    const bool fill = std::get<BoolValue>(fillBg);
+    const bool outline = std::get<BoolValue>(showOutline);
+    const bool icons = std::get<BoolValue>(showIcons);
+    const float textSize = std::get<FloatValue>(textSizeS);
+    const float padXv = fill ? static_cast<float>(std::get<FloatValue>(padX)) : 0.f;
+    const float padYv = fill ? static_cast<float>(std::get<FloatValue>(padY)) * 2.f : 0.f;
+    const d2d::Color bgCol = std::get<ColorValue>(bgColor).getMainColor();
+    const d2d::Color textCol = std::get<ColorValue>(textColor).getMainColor();
+    const d2d::Color outlineCol = std::get<ColorValue>(outlineColor).getMainColor();
+
+    const auto font = Renderer::FontSelection::SecondaryLight;
+    const float textH = std::max(mc.getTextSize(L"Ag", font, textSize, false).y, 8.f);
+    // Clamped to the slider range, so a value hand-edited into the config can't blow up the layout.
+    const float icon = std::clamp(static_cast<float>(std::get<FloatValue>(iconSize)), 8.f, 128.f);
+    const float iconGap = std::max(4.f, icon * 0.25f);
+    const float indent = icons ? icon + iconGap : 0.f; // Item and detail lines start after the icon column.
+
+    // Row heights and the widest line.
+    std::vector<float> heights;
+    heights.reserve(rows.size());
+    float width = 0.f;
+    float totalH = 0.f;
+    for (auto const& row : rows) {
+        const float h = row.kind == RowKind::Item && icons ? std::max(textH, icon) : textH;
+        heights.push_back(h);
+        totalH += h;
+        const float left = row.kind == RowKind::Header ? 0.f : indent;
+        width = std::max(width, left + mc.getTextSize(row.text, font, textSize, false).x);
+    }
+    width += padXv * 2.f;
+    totalH += padYv * 2.f;
+
+    const d2d::Rect rc = d2d::Rect(0.f, 0.f, width, totalH);
+    const float rad = (static_cast<float>(std::get<FloatValue>(radius)) / 10.f) * (rc.getHeight() / 2.f);
+    if (outline) mc.drawRoundedRectangle(rc, outlineCol, rad, std::get<FloatValue>(outlineThickness));
+    if (fill) mc.fillRoundedRectangle(rc, bgCol, rad);
+
+    float y = padYv;
+    std::vector<float> tops; // where each row starts, for the icons
+    tops.reserve(rows.size());
+    for (size_t i = 0; i < rows.size(); ++i) {
+        const float left = padXv + (rows[i].kind == RowKind::Header ? 0.f : indent);
+        mc.drawText(d2d::Rect(left, y, width - padXv, y + heights[i]), rows[i].text, textCol, font, textSize,
+                    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        tops.push_back(y);
+        y += heights[i];
+    }
+
+    this->rect.right = rect.left + width;
+    this->rect.bottom = rect.top + totalH;
+
+    // The icons: an item stack built from the vault block, pointed at each item in turn (the way WAILA draws its tool
+    // icons). Needs the vault block; without it (the HUD editor sample away from a block) the icon column stays empty.
+    if (icons && block && Signatures::ItemStackVtable.result && Signatures::ItemStackBase_destructor.result) {
+        alignas(SDK::ItemStack) char storage[sizeof(SDK::ItemStack)] = {};
+        if (auto* stack = SDK::ItemStack::constructBlockItem(storage, *block)) {
+            auto originalItem = stack->item;
+            auto originalBlock = stack->block;
+            auto originalAux = stack->aux;
+
+            mc.flush(false);
+            for (size_t i = 0; i < rows.size(); ++i) {
+                if (rows[i].kind != RowKind::Item || rows[i].item.empty()) continue;
+                void* counter = findItemCounter(rows[i].item);
+                if (!counter) continue;
+                stack->item = reinterpret_cast<SDK::Item**>(counter);
+                stack->block = nullptr;
+                stack->aux = 0;
+                stack->itemCount = static_cast<uint8_t>(std::clamp(rows[i].count, 1, 64));
+                const float iconTop = tops[i] + (heights[i] - icon) / 2.f;
+                mc.drawItem(stack, { padXv, iconTop }, icon / 48.f, 1.f);
+            }
+
+            stack->item = originalItem;
+            stack->block = originalBlock;
+            stack->aux = originalAux;
+            stack->destruct();
+        }
+    }
+
+    mc.flush();
 }
