@@ -280,9 +280,9 @@ std::vector<VaultPredictor::Row> VaultPredictor::buildRows(bool preview, SDK::Bl
         int64_t value = 0;
         const bool typed = parseSeed(std::get<TextValue>(seed).str, value);
         std::lock_guard lock(mutex);
-        if (typed) seedLine = L"§7Seed: " + std::to_wstring(value) + L" (typed)§r";
-        else if (haveServerSeed) seedLine = L"§7Seed: " + std::to_wstring(serverSeed) + L" (from the server)§r";
-        else seedLine = L"§7Seed: unknown§r";
+        if (typed) seedLine = L"\u00A77Seed: " + std::to_wstring(value) + L" (typed)\u00A7r";
+        else if (haveServerSeed) seedLine = L"\u00A77Seed: " + std::to_wstring(serverSeed) + L" (from the server)\u00A7r";
+        else seedLine = L"\u00A77Seed: unknown\u00A7r";
     }
 
     // The block the icons are built from: the vault in the crosshair (or any block there, for the sample).
@@ -295,10 +295,10 @@ std::vector<VaultPredictor::Row> VaultPredictor::buildRows(bool preview, SDK::Bl
     }
 
     if (preview) {
-        header(L"§6Vault Predictor§r");
-        header(L"§bNormal Vault§r");
+        header(L"\u00A76Vault Predictor\u00A7r");
+        header(L"\u00A7bNormal Vault\u00A7r");
         header(seedLine);
-        header(L"§aRewards sent by the server:§r");
+        header(L"\u00A7aRewards sent by the server:\u00A7r");
         vault_nbt::ItemInfo book;
         book.name = "minecraft:enchanted_book";
         book.enchants.push_back({ 9, 5 });
@@ -307,7 +307,7 @@ std::vector<VaultPredictor::Row> VaultPredictor::buildRows(bool preview, SDK::Bl
         emerald.name = "minecraft:emerald";
         emerald.count = 3;
         addItem(rows, emerald);
-        header(L"§8(sample)§r");
+        header(L"\u00A78(sample)\u00A7r");
         return rows;
     }
 
@@ -337,24 +337,24 @@ std::vector<VaultPredictor::Row> VaultPredictor::buildRows(bool preview, SDK::Bl
         if (wanted == TypeOminous && !ominous) return rows;
     }
 
-    header(L"§6Vault Predictor§r");
-    if (known && !data.lootTable.empty()) header(ominous ? L"§5Ominous Vault§r" : L"§bNormal Vault§r");
-    else header(L"§7Vault (type not received)§r");
+    header(L"\u00A76Vault Predictor\u00A7r");
+    if (known && !data.lootTable.empty()) header(ominous ? L"\u00A75Ominous Vault\u00A7r" : L"\u00A7bNormal Vault\u00A7r");
+    else header(L"\u00A77Vault (type not received)\u00A7r");
     header(seedLine);
 
     if (!known) {
-        header(L"§7No data from the server for this vault yet.§r");
+        header(L"\u00A77No data from the server for this vault yet.\u00A7r");
         return rows;
     }
 
     if (!data.toEject.empty()) {
-        header(L"§aRewards sent by the server:§r");
+        header(L"\u00A7aRewards sent by the server:\u00A7r");
         for (auto const& item : data.toEject) addItem(rows, item);
     } else {
-        header(L"§7Rewards: the server hasn't sent any for this vault.§r");
+        header(L"\u00A77Rewards: the server hasn't sent any for this vault.\u00A7r");
     }
     if (data.hasDisplay) {
-        header(L"§8Shown in the vault (not a reward):§r");
+        header(L"\u00A78Shown in the vault (not a reward):\u00A7r");
         addItem(rows, data.display);
     }
     return rows;
