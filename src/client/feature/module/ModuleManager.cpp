@@ -32,6 +32,7 @@
 #include "modules/visual/Hitboxes.h"
 #include "modules/visual/CobwebOutline.h"
 #include "modules/game/ContainerLogger.h"
+#include "modules/hud/VaultPredictor.h"
 #include "modules/visual/ShieldIndicator.h"
 #include "modules/visual/ChunkBorders.h"
 #include "modules/visual/Hitboxes.h"
@@ -99,6 +100,7 @@ ModuleManager::ModuleManager() {
     this->items.push_back(std::make_shared<Hitboxes>());
     this->items.push_back(std::make_shared<CobwebOutline>());
     this->items.push_back(std::make_shared<ContainerLogger>());
+    this->items.push_back(std::make_shared<VaultPredictor>());
     this->items.push_back(std::make_shared<ShieldIndicator>());
     this->items.push_back(std::make_shared<BlockOutline>());
     this->items.push_back(std::make_shared<MovableScoreboard>());
