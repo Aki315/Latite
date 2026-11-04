@@ -369,6 +369,8 @@
         "client.hudmodule.targetHud.shieldNumber.off.desc": "Shows only the bar, no number.",
         "client.hudmodule.targetHud.showAbsorption.name": "Show Golden Hearts",
         "client.hudmodule.targetHud.showAbsorption.desc": "Also shows golden (absorption) hearts, like from golden apples.",
+        "client.hudmodule.targetHud.showDamage.name": "Show Damage",
+        "client.hudmodule.targetHud.showDamage.desc": "Shows a red number beside the HUD with the health your target lost, every time the server tells you their health dropped. Uses the Unit setting (health points or hearts).",
         "client.hudmodule.targetHud.textSize.name": "Text Size",
         "client.hudmodule.targetHud.textSize.desc": "The size of the text. The numbers and the layout follow it.",
         "client.hudmodule.targetHud.colorByHealth.name": "Color By Health",

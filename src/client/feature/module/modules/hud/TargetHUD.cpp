@@ -901,6 +901,8 @@ TargetHUD::TargetHUD()
                      FloatValue(2.f), FloatValue(1.f));
     addSetting("showAbsorption", LocalizeString::get("client.hudmodule.targetHud.showAbsorption.name"),
                LocalizeString::get("client.hudmodule.targetHud.showAbsorption.desc"), showAbsorption);
+    addSetting("showDamage", LocalizeString::get("client.hudmodule.targetHud.showDamage.name"),
+               LocalizeString::get("client.hudmodule.targetHud.showDamage.desc"), showDamage);
     addSetting("colorByHealth", LocalizeString::get("client.hudmodule.targetHud.colorByHealth.name"),
                LocalizeString::get("client.hudmodule.targetHud.colorByHealth.desc"), colorByHealth);
     addSetting("healthColor", LocalizeString::get("client.hudmodule.targetHud.healthColor.name"),
@@ -1296,6 +1298,37 @@ void TargetHUD::render(DrawUtil& dc, bool isDefault, bool inEditor) {
     case DesignTag: size = drawTag(f); break;
     case DesignSideBar: size = drawSideBar(f); break;
     default: size = drawPill(f); break;
+    }
+
+    // The damage popup: the drop in the target's health between two frames, floating up beside the HUD for a moment.
+    if (std::get<BoolValue>(showDamage) && info.id != 0 && known) {
+        const auto now = std::chrono::steady_clock::now();
+        const float total = info.health + info.absorption;
+        const bool sameTarget = damageFor == info.id && now - lastSeen < std::chrono::milliseconds(500);
+        if (sameTarget && total < lastTotal - 0.01f) {
+            // Hits that land within a moment of each other add up (a combo reads as one number).
+            const bool recent = now - damageTime < std::chrono::milliseconds(600);
+            damageAmount = (recent ? damageAmount : 0.f) + (lastTotal - total);
+            damageTime = now;
+        } else if (damageFor != info.id) {
+            damageAmount = 0.f;
+            damageTime = {};
+        }
+        damageFor = info.id;
+        lastTotal = total;
+        lastSeen = now;
+
+        const float age = std::chrono::duration<float>(now - damageTime).count();
+        if (damageAmount > 0.f && damageTime != std::chrono::steady_clock::time_point {} && age < 1.2f) {
+            const float value = inHearts ? damageAmount / 2.f : damageAmount;
+            const std::wstring text = L"-" + trimmed(value, 1);
+            const float textPx = f.textSize * 1.1f;
+            const Vec2 box = measure(f, text, textPx);
+            const float fadeOut = age < 0.7f ? 1.f : std::max(0.f, 1.f - (age - 0.7f) / 0.5f);
+            const float rise = std::min(age, 1.f) * 10.f;
+            putText(f, size.x + 6.f, (size.y - box.y) * 0.5f - rise, box.x + 4.f, box.y, text,
+                    alpha(d2d::Color::RGB(255, 85, 85), fadeOut * f.opacity), textPx);
+        }
     }
 
     rect.right = rect.left + size.x;

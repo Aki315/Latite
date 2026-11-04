@@ -83,6 +83,7 @@ private:
     static constexpr int ArmorNumberRemaining = 2; // 312
     EnumData armorNumber;
     ValueType showAbsorption = BoolValue(true);
+    ValueType showDamage = BoolValue(true); // A red -1.9 beside the HUD for every hit, taken from the health the server sent.
     ValueType heartSize = FloatValue(2.f); // Size of one heart pixel; 2 = the original size. Whole numbers keep it crisp.
     ValueType itemSize = FloatValue(1.3f); // Size of the armor, offhand and item icons; 1 = the original size.
     ValueType textSize = FloatValue(20.f);
@@ -100,6 +101,13 @@ private:
     // The health bar and ring ease toward the real value instead of jumping.
     float shownFraction = 1.f;
     uint64_t shownFor = 0;
+
+    // The damage popup: the health (plus golden hearts) last seen for the target, and the last drop.
+    uint64_t damageFor = 0;
+    float lastTotal = -1.f;
+    float damageAmount = 0.f;
+    std::chrono::steady_clock::time_point lastSeen {};
+    std::chrono::steady_clock::time_point damageTime {};
     std::chrono::steady_clock::time_point lastFrame {};
 
     // The armor durability guesses (see util/ArmorEstimate.h): one per player, followed every tick, so the wear from
