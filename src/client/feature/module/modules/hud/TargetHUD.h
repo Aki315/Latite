@@ -106,6 +106,7 @@ private:
     // all the hits adds up even while the HUD is hidden or you are fighting someone else.
     ArmorEstimate::Trackers armorTrackers;
     void updateArmorEstimate(TargetInfo& info);
+    void logRealArmor(TargetInfo const& info);
     void onUpdate(Event& event);
 
     // The server sending a player's whole armor again (put on, taken off, swapped): their estimate starts over.

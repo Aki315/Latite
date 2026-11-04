@@ -946,7 +946,7 @@ TargetHUD::TargetHUD()
                      LocalizeString::get("client.hudmodule.targetHud.wearScale.desc"), wearScale, FloatValue(0.5f),
                      FloatValue(3.f), FloatValue(0.05f), "estimateArmor"_istrue);
     addSetting("debugLog", LocalizeString::get("client.hudmodule.targetHud.debugLog.name"),
-               LocalizeString::get("client.hudmodule.targetHud.debugLog.desc"), debugLog, "estimateArmor"_istrue);
+               LocalizeString::get("client.hudmodule.targetHud.debugLog.desc"), debugLog);
     assumeStrength.addEntry(EnumEntry(StrengthNone, LocalizeString::get("client.hudmodule.targetHud.assumeStrength.none.name"),
                                       LocalizeString::get("client.hudmodule.targetHud.assumeStrength.none.desc")));
     assumeStrength.addEntry(EnumEntry(StrengthI, LocalizeString::get("client.hudmodule.targetHud.assumeStrength.one.name"),
@@ -1032,6 +1032,33 @@ void TargetHUD::afterLoadConfig() {
     Vec2 screenSize = clientInstance->getGuiData()->screenSize;
     setPos({ screenSize.x * 0.5f + 40.f, screenSize.y * 0.5f + 40.f });
     storePos(screenSize);
+}
+
+// Debug: what the server really told this client about the target's armor, so it can be compared with the estimate.
+// Printed at most once per second for the same target.
+void TargetHUD::logRealArmor(TargetInfo const& info) {
+    static uint64_t lastId = 0;
+    static auto lastLog = std::chrono::steady_clock::time_point {};
+    const auto now = std::chrono::steady_clock::now();
+    if (info.id == lastId && now - lastLog < std::chrono::seconds(1)) return;
+    lastId = info.id;
+    lastLog = now;
+
+    static const char* names[4] = { "helmet", "chestplate", "leggings", "boots" };
+    for (int i = 0; i < 4; ++i) {
+        auto* stack = info.armor[i];
+        if (!stack || !stack->getItem()) continue;
+        if (!Signatures::ItemStackBase_getDamageValue.result) {
+            Logger::Info("[TargetHUD] real armor: damage lookup not available");
+            return;
+        }
+        auto* item = stack->getItem();
+        const int maxDamage = item->getMaxDamage();
+        const int damage = static_cast<int>(stack->getDamageValue());
+        Logger::Info("[TargetHUD] real armor {} {} {}: server damage {} / max {} (estimate lost {})",
+                     util::WStrToStr(info.name), names[i], item->namespacedId.getString(), damage, maxDamage,
+                     info.armorDamage[i]);
+    }
 }
 
 void TargetHUD::updateArmorEstimate(TargetInfo& info) {
@@ -1139,6 +1166,7 @@ bool TargetHUD::gatherInfo(bool preview, TargetInfo& info) {
                 auto* stack = actor->getArmor(slot);
                 if (stack && stack->getItem()) info.armor[slot] = stack;
             }
+            if (std::get<BoolValue>(debugLog)) logRealArmor(info);
             if (std::get<BoolValue>(estimateArmor)) {
                 updateArmorEstimate(info);
             }
