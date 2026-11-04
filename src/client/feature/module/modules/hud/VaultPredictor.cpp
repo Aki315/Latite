@@ -111,6 +111,9 @@ VaultPredictor::VaultPredictor()
                LocalizeString::get("client.textmodule.vaultPredictor.showAmounts.desc"), showAmounts);
     addSetting("showEnchantments", LocalizeString::get("client.textmodule.vaultPredictor.showEnchantments.name"),
                LocalizeString::get("client.textmodule.vaultPredictor.showEnchantments.desc"), showEnchantments);
+    addSliderSetting("maxDistance", LocalizeString::get("client.textmodule.vaultPredictor.maxDistance.name"),
+                     LocalizeString::get("client.textmodule.vaultPredictor.maxDistance.desc"), maxDistance,
+                     FloatValue(2.f), FloatValue(128.f), FloatValue(1.f));
     addSetting("showIcons", LocalizeString::get("client.textmodule.vaultPredictor.showIcons.name"),
                LocalizeString::get("client.textmodule.vaultPredictor.showIcons.desc"), showIcons);
     addSliderSetting("iconSize", LocalizeString::get("client.textmodule.vaultPredictor.iconSize.name"),
@@ -202,6 +205,7 @@ void VaultPredictor::handleBlockActorData(SDK::Packet* pkt) {
     std::lock_guard lock(mutex);
     if (vaults.size() > kMaxVaults) vaults.clear();
     auto& entry = vaults[keyOf(x, y, z)];
+    entry.pos = BlockPos { x, y, z };
     // An update that leaves a field out must not wipe what an earlier update said about it.
     if (data.lootTable.empty()) data.lootTable = entry.data.lootTable;
     if (data.overrideLootTable.empty()) data.overrideLootTable = entry.data.overrideLootTable;
@@ -311,12 +315,48 @@ std::vector<VaultPredictor::Row> VaultPredictor::buildRows(bool preview, SDK::Bl
         return rows;
     }
 
-    if (!aimingAtBlock || blockNameInner(hit->hitBlock) != "minecraft:vault") {
+    // Which vault: the one in the crosshair or, when you aren't aiming at one, the nearest vault the server has sent data
+    // for that is within Max Distance. (A vault is only known once the server has sent data about it.)
+    const float maxDist = std::clamp(static_cast<float>(std::get<FloatValue>(maxDistance)), 2.f, 128.f);
+    auto* player = client ? client->getLocalPlayer() : nullptr;
+    if (!player) return rows;
+    const Vec3 me = player->getPos();
+    auto distanceTo = [&](BlockPos const& p) {
+        return me.distance(Vec3 { p.x + 0.5f, p.y + 0.5f, p.z + 0.5f });
+    };
+
+    BlockPos pos {};
+    bool found = false;
+    if (aimingAtBlock && blockNameInner(hit->hitBlock) == "minecraft:vault" && distanceTo(hit->hitBlock) <= maxDist) {
+        pos = hit->hitBlock;
+        found = true;
+    } else {
+        float best = maxDist;
+        std::vector<BlockPos> candidates;
+        {
+            std::lock_guard lock(mutex);
+            for (auto const& [k, entry] : vaults) {
+                if (distanceTo(entry.pos) <= best) candidates.push_back(entry.pos);
+            }
+        }
+        for (auto const& p : candidates) {
+            const float d = distanceTo(p);
+            if (d > best) continue;
+            // It must still be a vault; an empty name means the chunk isn't loaded on your side, which is fine.
+            const std::string name = blockNameInner(p);
+            if (!name.empty() && name != "minecraft:vault") continue;
+            best = d;
+            pos = p;
+            found = true;
+        }
+    }
+    if (!found) {
         block = nullptr;
         return rows;
     }
+    block = nullptr;
+    if (auto* region = client->getRegion()) block = region->getBlock(pos);
 
-    const BlockPos pos = hit->hitBlock;
     const uint64_t key = keyOf(pos.x, pos.y, pos.z);
     vault_nbt::VaultData data;
     bool known = false;

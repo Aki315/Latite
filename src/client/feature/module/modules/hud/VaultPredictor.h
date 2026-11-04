@@ -19,6 +19,8 @@ namespace SDK {
 // Shows what your game knows about the trial vault (or ominous vault) you are looking at.
 //
 // What it can and can't do:
+//   * It shows the vault in your crosshair or, when there is none, the nearest vault the server has sent data for within
+//     Max Distance.
 //   * It reads the vault's block entity data, which the server sends to your client: the loot table (that is what tells a
 //     normal vault from an ominous one), the item shown in the vault right now (NOT a reward: the game picks it at
 //     random once a second), and the rewards list (items_to_eject) when the server has filled it.
@@ -53,6 +55,7 @@ private:
     static constexpr int TypeOminous = 2;
 
     struct Entry {
+        BlockPos pos {};
         vault_nbt::VaultData data;
         std::chrono::steady_clock::time_point seen {};
     };
@@ -79,6 +82,7 @@ private:
     ValueType showNames = BoolValue(true);
     ValueType showAmounts = BoolValue(true);
     ValueType showEnchantments = BoolValue(true);
+    ValueType maxDistance = FloatValue(16.f);  // Vaults further away than this (in blocks) are not shown.
     ValueType showIcons = BoolValue(true);
     ValueType iconSize = FloatValue(32.f);     // Width and height of an item icon, in the same units as the text size.
     ValueType debugMode = BoolValue(false);

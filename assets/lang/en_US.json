@@ -649,6 +649,8 @@
         "client.textmodule.vaultPredictor.showAmounts.desc": "Writes how many of each item (x3).",
         "client.textmodule.vaultPredictor.showEnchantments.name": "Show Enchantments",
         "client.textmodule.vaultPredictor.showEnchantments.desc": "Lists the enchantments of items and enchanted books, with their level.",
+        "client.textmodule.vaultPredictor.maxDistance.name": "Max Distance",
+        "client.textmodule.vaultPredictor.maxDistance.desc": "Shows the vault in your crosshair, or the nearest vault the server has sent data for, as long as it is within this many blocks. Vaults further away are not shown.",
         "client.textmodule.vaultPredictor.showIcons.name": "Show Item Icons",
         "client.textmodule.vaultPredictor.showIcons.desc": "Draws the item icon in front of every reward and of the item shown in the vault.",
         "client.textmodule.vaultPredictor.iconSize.name": "Icon Size",
