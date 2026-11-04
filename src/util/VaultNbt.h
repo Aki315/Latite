@@ -51,23 +51,38 @@ namespace vault_nbt {
         return std::string::npos;
     }
 
-    // The value after a key: skips ':', '=', quotes and spaces, then reads an identifier like minecraft:diamond.
-    inline std::string readIdentifier(std::string const& text, size_t from) {
+    // Where the value after a key starts. The game prints a tag as lines like
+    //     // Name
+    //     TAG_String: minecraft:diamond
+    // so this skips spaces, new lines, ':', '=' and quotes, and a "TAG_Type:" label if one comes next.
+    inline size_t valueStart(std::string const& text, size_t from) {
         size_t i = from;
-        while (i < text.size() && (text[i] == ':' || text[i] == '=' || text[i] == ' ' || text[i] == '"' || text[i] == '\t'))
-            ++i;
+        auto skip = [&] {
+            while (i < text.size() && (text[i] == ':' || text[i] == '=' || text[i] == ' ' || text[i] == '"' ||
+                                       text[i] == '\t' || text[i] == '\n' || text[i] == '\r'))
+                ++i;
+        };
+        skip();
+        if (text.compare(i, 4, "TAG_") == 0) {
+            while (i < text.size() && text[i] != ':' && text[i] != '\n') ++i;
+            skip();
+        }
+        return i;
+    }
+
+    // The value after a key as an identifier like minecraft:diamond.
+    inline std::string readIdentifier(std::string const& text, size_t from) {
+        size_t i = valueStart(text, from);
         size_t end = i;
         while (end < text.size() && (isWordChar(text[end]) || text[end] == ':' || text[end] == '.' || text[end] == '/'))
             ++end;
         return text.substr(i, end - i);
     }
 
-    // The number after a key, or `fallback`. Stays on the same line.
+    // The number after a key, or `fallback` when what follows isn't a number.
     inline int readNumber(std::string const& text, size_t from, int fallback) {
-        size_t i = from;
-        while (i < text.size() && text[i] != '\n' && !std::isdigit(static_cast<unsigned char>(text[i])) && text[i] != '-')
-            ++i;
-        if (i >= text.size() || text[i] == '\n') return fallback;
+        const size_t i = valueStart(text, from);
+        if (i >= text.size() || !(std::isdigit(static_cast<unsigned char>(text[i])) || text[i] == '-')) return fallback;
         return std::atoi(text.c_str() + i);
     }
 
@@ -137,6 +152,16 @@ namespace vault_nbt {
                 break;
             }
             idAt += 2;
+        }
+        // The server's updates for a vault don't always carry the block entity id, so the vault's own fields count too.
+        if (!out.isVault) {
+            for (const char* key : { "connected_particle_range", "display_item", "items_to_eject",
+                                     "total_ejections_needed", "override_loot_table_to_display", "activation_range" }) {
+                if (findKey(text, key) != std::string::npos) {
+                    out.isVault = true;
+                    break;
+                }
+            }
         }
         if (!out.isVault) return out;
 
