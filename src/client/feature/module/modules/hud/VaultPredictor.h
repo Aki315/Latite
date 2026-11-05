@@ -34,7 +34,6 @@ public:
     void onRenderLayer(Event& event);
     void onPacketReceive(Event& event);
     void onLeaveGame(Event& event);
-    void onEnable() override;
 
 private:
     // The number is the entry's position in the list, and the first entry is the default: Both.
@@ -72,5 +71,6 @@ private:
 
     // Item id -> the game's item counter (what an ItemStack points at), built from the item registry. Render thread only.
     std::unordered_map<std::string, void*> itemCache;
+    std::unordered_map<uint64_t, std::chrono::steady_clock::time_point> lastDiag; // Debug Mode, render thread only.
     void* itemCacheRegistry = nullptr;
 };

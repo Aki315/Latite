@@ -23,6 +23,8 @@
 #include "util/Util.h"
 
 #include <algorithm>
+#include <cctype>
+#include <charconv>
 #include <cstdlib>
 #include <cstring>
 #include <format>
@@ -87,14 +89,25 @@ namespace {
         return block->legacyBlock->namespacedId.getString();
     }
 
-    // The 64-bit number the user typed, if it is one.
-    bool parseSeed(std::wstring const& text, int64_t& out) {
-        if (text.empty()) return false;
-        wchar_t* end = nullptr;
-        const long long value = std::wcstoll(text.c_str(), &end, 10);
-        if (end == text.c_str() || (end && *end != L'\0')) return false;
+    enum class SeedStatus { Empty, Ok, Invalid, OutOfRange };
+
+    // The whole text has to be one signed 64-bit whole number (spaces around it are fine). Nothing is ever turned into 0.
+    SeedStatus parseSeed(std::wstring const& text, int64_t& out) {
+        std::string s = util::WStrToStr(text);
+        const auto notSpace = [](unsigned char c) { return !std::isspace(c); };
+        s.erase(s.begin(), std::find_if(s.begin(), s.end(), notSpace));
+        s.erase(std::find_if(s.rbegin(), s.rend(), notSpace).base(), s.end());
+        if (s.empty()) return SeedStatus::Empty;
+
+        const char* begin = s.data();
+        const char* end = s.data() + s.size();
+        if (*begin == '+') ++begin; // from_chars doesn't take a leading plus
+        int64_t value = 0;
+        const auto [ptr, ec] = std::from_chars(begin, end, value);
+        if (ec == std::errc::result_out_of_range) return SeedStatus::OutOfRange;
+        if (ec != std::errc() || ptr != end) return SeedStatus::Invalid;
         out = value;
-        return true;
+        return SeedStatus::Ok;
     }
 } // namespace
 
@@ -133,13 +146,13 @@ VaultPredictor::VaultPredictor()
     addSetting("debugMode", LocalizeString::get("client.textmodule.vaultPredictor.debugMode.name"),
                LocalizeString::get("client.textmodule.vaultPredictor.debugMode.desc"), debugMode);
 
-    // The seed packet comes once, when you join, so the server's seed is only known if the module was on at that moment.
-    listen<PacketReceiveEvent>((EventListenerFunc)&VaultPredictor::onPacketReceive);
+    // The seed packet comes once, when you join, and vault updates only while you are near, so the packets are read even
+    // while the module is off: switching it on later still finds the seed and the vaults already seen.
+    listen<PacketReceiveEvent>((EventListenerFunc)&VaultPredictor::onPacketReceive, true);
     listen<LeaveGameEvent>((EventListenerFunc)&VaultPredictor::onLeaveGame, true);
     listen<RenderLayerEvent>((EventListenerFunc)&VaultPredictor::onRenderLayer);
 }
 
-void VaultPredictor::onEnable() { reset(); }
 void VaultPredictor::onLeaveGame(Event&) {
     reset();
     std::lock_guard lock(mutex);
@@ -166,7 +179,8 @@ void VaultPredictor::onPacketReceive(Event& evG) {
             std::lock_guard lock(mutex);
             serverSeed = value;
             haveServerSeed = true;
-            if (std::get<BoolValue>(debugMode)) Logger::Info("[VaultPredictor] world seed from the server: {}", value);
+            if (isEnabled() && std::get<BoolValue>(debugMode))
+                Logger::Info("[VaultPredictor] StartGame packet: world seed {} (offset 0x30)", value);
         }
         break;
     }
@@ -195,7 +209,7 @@ void VaultPredictor::handleBlockActorData(SDK::Packet* pkt) {
     auto data = vault_nbt::parse(out.mStr);
     if (!data.isVault) {
         // Debug: say which other block entities arrive, once per kind, so it is clear the packet works at all.
-        if (std::get<BoolValue>(debugMode)) {
+        if (isEnabled() && std::get<BoolValue>(debugMode)) {
             const std::string id = out.mStr.substr(0, 400);
             std::lock_guard lock(mutex);
             if (ignoredIds.size() < 20 && ignoredIds.insert(id).second) {
@@ -205,22 +219,19 @@ void VaultPredictor::handleBlockActorData(SDK::Packet* pkt) {
         return;
     }
 
-    if (std::get<BoolValue>(debugMode)) {
-        int64_t typedSeed = 0;
-        const bool typed = parseSeed(std::get<TextValue>(seed).str, typedSeed);
-        {
-            std::lock_guard lock(mutex);
-            Logger::Info("[VaultPredictor] seed: {} ({})", typed ? typedSeed : serverSeed,
-                         typed ? "typed" : (haveServerSeed ? "from the server" : "unknown"));
-        }
-        Logger::Info("[VaultPredictor] vault data:\n{}\n  -> loot table '{}', override '{}', display item {} x{}, "
-                     "items_to_eject field {} with {} item(s)",
-                     out.mStr.substr(0, 6000), data.lootTable, data.overrideLootTable,
-                     data.hasDisplay ? data.display.name : std::string("none"), data.hasDisplay ? data.display.count : 0,
-                     data.hasEjectField ? "present" : "absent", data.toEject.size());
+    if (isEnabled() && std::get<BoolValue>(debugMode)) {
+        Logger::Info("[VaultPredictor] vault update: loot table '{}', display item {}, items_to_eject {}",
+                     data.lootTable.empty() ? std::string("not sent") : data.lootTable,
+                     data.hasDisplay ? data.display.name : std::string("none"),
+                     data.hasEjectField ? std::to_string(data.toEject.size()) + " item(s)" : std::string("not sent"));
     }
 
     std::lock_guard lock(mutex);
+    // Entries not updated for ten minutes are dropped (the vault was left far behind or its chunk unloaded).
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = vaults.begin(); it != vaults.end();) {
+        it = now - it->second.seen > std::chrono::minutes(10) ? vaults.erase(it) : std::next(it);
+    }
     if (vaults.size() > kMaxVaults) vaults.clear();
     auto& entry = vaults[keyOf(x, y, z)];
     entry.pos = BlockPos { x, y, z };
@@ -353,8 +364,8 @@ void VaultPredictor::onRenderLayer(Event& evG) {
         const float gap = 6.f * scale;
         const float pad = 5.f * scale;
 
-        // The columns: the rewards the server sent or, with none, the item shown in the vault (labelled).
-        const bool shownOnly = data.toEject.empty() && data.hasDisplay;
+        // The columns: only rewards the server really sent. The item spinning in the vault (display_item) is not a reward
+        // and is never drawn.
         std::vector<Column> cols;
         auto addColumn = [&](vault_nbt::ItemInfo const& item) {
             Column col;
@@ -369,19 +380,14 @@ void VaultPredictor::onRenderLayer(Event& evG) {
             }
             cols.push_back(std::move(col));
         };
-        if (!data.toEject.empty()) {
-            for (auto const& item : data.toEject) addColumn(item);
-        } else if (data.hasDisplay) {
-            addColumn(data.display);
-        }
+        for (auto const& item : data.toEject) addColumn(item);
 
         // The title under the icons: the type and the distance.
         const std::wstring title = std::wstring(ominous ? L"Ominous Vault" : L"Vault") + L" " +
                                    std::to_wstring(static_cast<int>(std::lround(pick.dist))) + L"m";
         const d2d::Color titleColor = ominous ? d2d::Color::RGB(120, 200, 255) : d2d::Color::RGB(255, 170, 0);
         std::wstring note;
-        if (shownOnly) note = L"shown in the vault, not a reward";
-        else if (cols.empty()) note = L"no reward data from the server";
+        if (cols.empty()) note = L"rewards not sent by the server";
 
         const float lineH = std::max(mc.getTextSize(L"Ag", font, ts, false).y, 6.f);
         const Vec2 titleBox = mc.getTextSize(title, font, ts, false);
@@ -451,6 +457,50 @@ void VaultPredictor::onRenderLayer(Event& evG) {
 
         if (!iconBlock) iconBlock = region->getBlock(pick.entry.pos);
         ++drawn;
+
+        if (std::get<BoolValue>(debugMode)) {
+            const uint64_t key = keyOf(pick.entry.pos.x, pick.entry.pos.y, pick.entry.pos.z);
+            auto& last = lastDiag[key];
+            const auto now = std::chrono::steady_clock::now();
+            if (lastDiag.size() > 256) lastDiag.clear();
+            if (last.time_since_epoch().count() == 0 || now - last > std::chrono::seconds(5)) {
+                last = now;
+                int64_t typedSeed = 0;
+                const SeedStatus seedStatus = parseSeed(std::get<TextValue>(seed).str, typedSeed);
+                bool haveSeed = false;
+                int64_t worldSeed = 0;
+                {
+                    std::lock_guard lock(mutex);
+                    haveSeed = haveServerSeed;
+                    worldSeed = serverSeed;
+                }
+                std::string manual = "not set";
+                if (seedStatus == SeedStatus::Ok) manual = std::format("OK ({})", typedSeed);
+                else if (seedStatus == SeedStatus::Invalid) manual = "INVALID (not a whole number)";
+                else if (seedStatus == SeedStatus::OutOfRange) manual = "INVALID (outside the signed 64-bit range)";
+                std::string match = "n/a";
+                if (seedStatus == SeedStatus::Ok && haveSeed) match = typedSeed == worldSeed ? "typed seed equals the server's" : "DIFFERENT from the server's";
+                Logger::Info(
+                    "[VaultPredictor] diagnostics for a vault in range:\n"
+                    "  World seed (StartGame packet): {}\n"
+                    "  Manual seed: {}\n"
+                    "  Seed comparison: {}\n"
+                    "  Vault detected: OK\n"
+                    "  Position: {}, {}, {}\n"
+                    "  Vault type: {}\n"
+                    "  Player seed: NOT AVAILABLE (not sent to the client; how Bedrock derives it is unknown)\n"
+                    "  Loot calculation: NOT AVAILABLE (the Bedrock formula from level, position and player seed is not "
+                    "known, so nothing is calculated or guessed)\n"
+                    "  Server reward data (items_to_eject): {}\n"
+                    "  Predicted items: {}\n"
+                    "  HUD: {}",
+                    haveSeed ? std::format("OK ({})", worldSeed) : std::string("NOT RECEIVED (join the world again with the mod loaded)"),
+                    manual, match, pick.entry.pos.x, pick.entry.pos.y, pick.entry.pos.z,
+                    typeKnown ? (ominous ? "Ominous" : "Normal") : "UNKNOWN (the server sends no loot table for it)",
+                    data.hasEjectField ? std::to_string(data.toEject.size()) + " item(s) sent" : std::string("not sent"),
+                    data.toEject.size(), cols.empty() ? "title and note only (no rewards to draw)" : "rewards drawn");
+            }
+        }
     }
 
     // The icons: an item stack built from a vault block, pointed at each item in turn (the way WAILA draws its tool
