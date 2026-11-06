@@ -16,11 +16,16 @@
 #include "mc/common/network/Packet.h"
 #include "mc/common/world/Item.h"
 #include "mc/common/world/ItemStack.h"
+#include "mc/common/world/Minecraft.h"
+#include "mc/common/world/actor/player/Player.h"
+#include "mc/common/world/actor/player/PlayerListEntry.h"
+#include "mc/common/world/level/Level.h"
 #include "mc/common/world/level/BlockSource.h"
 #include "mc/common/world/level/HitResult.h"
 #include "mc/common/world/level/block/Block.h"
 #include "mc/common/world/level/block/BlockLegacy.h"
 #include "util/Util.h"
+#include "util/VaultLoot.h"
 
 #include <algorithm>
 #include <cctype>
@@ -124,6 +129,8 @@ VaultPredictor::VaultPredictor()
                    LocalizeString::get("client.textmodule.vaultPredictor.vaultType.desc"), vaultType);
     addSetting("seed", LocalizeString::get("client.textmodule.vaultPredictor.seed.name"),
                LocalizeString::get("client.textmodule.vaultPredictor.seed.desc"), seed);
+    addSetting("playerId", LocalizeString::get("client.textmodule.vaultPredictor.playerId.name"),
+               LocalizeString::get("client.textmodule.vaultPredictor.playerId.desc"), playerId);
     addSetting("showNames", LocalizeString::get("client.textmodule.vaultPredictor.showNames.name"),
                LocalizeString::get("client.textmodule.vaultPredictor.showNames.desc"), showNames);
     addSetting("showAmounts", LocalizeString::get("client.textmodule.vaultPredictor.showAmounts.name"),
@@ -246,6 +253,34 @@ void VaultPredictor::handleBlockActorData(SDK::Packet* pkt) {
     entry.seen = std::chrono::steady_clock::now();
 }
 
+// The unique actor id the loot is calculated with: the typed one, else your own entry in the player list (found by name;
+// when the list has only one entry, that one is you).
+bool VaultPredictor::localPlayerId(int64_t& out) const {
+    const SeedStatus typed = parseSeed(std::get<TextValue>(playerId).str, out); // a whole number, same rules as the seed
+    if (typed == SeedStatus::Ok) return true;
+    if (typed != SeedStatus::Empty) return false; // typed something that isn't a number: don't guess
+
+    auto* client = SDK::ClientInstance::get();
+    auto* player = client ? client->getLocalPlayer() : nullptr;
+    auto* level = client && client->minecraft ? client->minecraft->getLevel() : nullptr;
+    auto* players = level ? level->getPlayerList() : nullptr;
+    if (!player || !players || players->empty()) return false;
+
+    if (!player->playerName.empty()) {
+        for (auto& pair : *players) {
+            if (pair.second.name == player->playerName) {
+                out = pair.second.uniqueId;
+                return true;
+            }
+        }
+    }
+    if (players->size() == 1) {
+        out = players->begin()->second.uniqueId;
+        return true;
+    }
+    return false;
+}
+
 void* VaultPredictor::findItemCounter(std::string const& id) {
     auto* client = SDK::ClientInstance::get();
     auto* level = client && client->minecraft ? client->minecraft->getLevel() : nullptr;
@@ -335,6 +370,25 @@ void VaultPredictor::onRenderLayer(Event& evG) {
     MCDrawUtil mc { ev.getUIRenderContext(), client->minecraftGame->getFontRepository()->getMinecraftFont() };
     mc.setImmediate(false);
 
+    // What the loot is calculated from: the typed seed (or, when blank, the server's) and your unique actor id. A seed that
+    // is typed but isn't a number is never replaced by the server's.
+    int64_t calcSeed = 0;
+    bool haveCalcSeed = false;
+    {
+        const SeedStatus st = parseSeed(std::get<TextValue>(seed).str, calcSeed);
+        if (st == SeedStatus::Ok) {
+            haveCalcSeed = true;
+        } else if (st == SeedStatus::Empty) {
+            std::lock_guard lock(mutex);
+            if (haveServerSeed) {
+                calcSeed = serverSeed;
+                haveCalcSeed = true;
+            }
+        }
+    }
+    int64_t calcPlayer = 0;
+    const bool havePlayer = localPlayerId(calcPlayer);
+
     std::vector<IconJob> jobs;
     SDK::Block* iconBlock = nullptr;
     int drawn = 0;
@@ -382,12 +436,48 @@ void VaultPredictor::onRenderLayer(Event& evG) {
         };
         for (auto const& item : data.toEject) addColumn(item);
 
+        // No rewards from the server: work them out. The loot depends on the vault type, so an unknown type can't be done.
+        std::wstring note;
+        bool predictedShown = false;
+        if (cols.empty()) {
+            if (!typeKnown) {
+                note = L"vault type unknown";
+            } else if (!haveCalcSeed) {
+                note = L"no valid world seed (see the World Seed setting)";
+            } else if (!havePlayer) {
+                note = L"player id unknown (see the Player ID setting)";
+            } else {
+                const auto result = vault_loot::predict(calcSeed, calcPlayer, pick.entry.pos.x, pick.entry.pos.y,
+                                                        pick.entry.pos.z, ominous);
+                for (auto const& s : result.items) {
+                    vault_nbt::ItemInfo info;
+                    info.name = s.item;
+                    info.count = s.count;
+                    addColumn(info);
+                    auto& lines = cols.back().lines;
+                    if (names && !s.variant.empty()) {
+                        if (s.item == "minecraft:ominous_bottle") {
+                            // The amplifier counts from 0; the bottle's name shows the Bad Omen level.
+                            lines.push_back({ L"Bad Omen " + util::StrToWStr(vault_nbt::roman(std::atoi(s.variant.c_str()) + 1)),
+                                              d2d::Color::RGB(170, 170, 255), 0.8f });
+                        } else {
+                            lines.push_back({ util::StrToWStr(vault_nbt::prettyName(s.variant)), d2d::Color::RGB(170, 170, 255),
+                                              0.8f });
+                        }
+                    }
+                    if (s.details && enchants) lines.push_back({ L"enchantments unknown", d2d::Color::RGB(170, 170, 170), 0.8f });
+                }
+                predictedShown = !cols.empty();
+                if (!result.complete) note = L"the rest can't be predicted yet (enchanted item)";
+                else if (cols.empty()) note = L"nothing ejected";
+            }
+        }
+
         // The title under the icons: the type and the distance.
         const std::wstring title = std::wstring(ominous ? L"Ominous Vault" : L"Vault") + L" " +
-                                   std::to_wstring(static_cast<int>(std::lround(pick.dist))) + L"m";
+                                   std::to_wstring(static_cast<int>(std::lround(pick.dist))) + L"m" +
+                                   (predictedShown ? L" (predicted)" : L"");
         const d2d::Color titleColor = ominous ? d2d::Color::RGB(120, 200, 255) : d2d::Color::RGB(255, 170, 0);
-        std::wstring note;
-        if (cols.empty()) note = L"rewards not sent by the server";
 
         const float lineH = std::max(mc.getTextSize(L"Ag", font, ts, false).y, 6.f);
         const Vec2 titleBox = mc.getTextSize(title, font, ts, false);
@@ -488,17 +578,18 @@ void VaultPredictor::onRenderLayer(Event& evG) {
                     "  Vault detected: OK\n"
                     "  Position: {}, {}, {}\n"
                     "  Vault type: {}\n"
-                    "  Player seed: NOT AVAILABLE (not sent to the client; how Bedrock derives it is unknown)\n"
-                    "  Loot calculation: NOT AVAILABLE (the Bedrock formula from level, position and player seed is not "
-                    "known, so nothing is calculated or guessed)\n"
+                    "  Player id: {}\n"
                     "  Server reward data (items_to_eject): {}\n"
                     "  Predicted items: {}\n"
                     "  HUD: {}",
                     haveSeed ? std::format("OK ({})", worldSeed) : std::string("NOT RECEIVED (join the world again with the mod loaded)"),
                     manual, match, pick.entry.pos.x, pick.entry.pos.y, pick.entry.pos.z,
                     typeKnown ? (ominous ? "Ominous" : "Normal") : "UNKNOWN (the server sends no loot table for it)",
+                    havePlayer ? std::format("{}", calcPlayer) : std::string("UNKNOWN (set the Player ID setting)"),
                     data.hasEjectField ? std::to_string(data.toEject.size()) + " item(s) sent" : std::string("not sent"),
-                    data.toEject.size(), cols.empty() ? "title and note only (no rewards to draw)" : "rewards drawn");
+                    predictedShown ? std::format("{} column(s) calculated (seed {} used)", cols.size(), calcSeed)
+                                   : std::string("none"),
+                    cols.empty() ? "title and note only (no rewards to draw)" : "rewards drawn");
             }
         }
     }

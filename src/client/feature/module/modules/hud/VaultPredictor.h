@@ -20,10 +20,11 @@ namespace SDK {
 //
 // What it can and can't do:
 //   * It shows every vault the server has sent data about that is within Max Distance (up to a few, nearest first).
-//   * Bedrock decides a vault's rewards from the level, the vault's position and a player seed (1.21.20 changelog:
-//     "Loot ejected from Vaults in Trial Chambers are now dependent on level, position and player seed"). The formula
-//     isn't public and nothing here calculates it. The rewards shown are the ones in the vault data the server sends to
-//     your game (items_to_eject); when the server sends none, the vault shows only its type and distance.
+//   * Bedrock decides a vault's rewards from the level seed, the vault's position and the player (1.21.20 changelog:
+//     "Loot ejected from Vaults in Trial Chambers are now dependent on level, position and player seed"). util/VaultLoot.h
+//     works that out from the world seed, your unique actor id and the position, the way the game does. Rewards the server
+//     sends in the vault data (items_to_eject) are shown as they are and take priority.
+//   * Enchanted items can't be predicted yet (their code isn't decoded): the prediction stops at the first one.
 //   * The item shown inside the vault (display_item) is not a reward and is only shown, labelled, when no rewards are known.
 //   * Debug Mode writes the raw vault data to the log (latest.log), which is how to see what the server sends.
 class VaultPredictor final : public Module {
@@ -50,9 +51,11 @@ private:
     void reset();
     void handleBlockActorData(SDK::Packet* pkt);
     void* findItemCounter(std::string const& id);
+    bool localPlayerId(int64_t& out) const; // The typed Player ID, else the one in the player list.
 
     EnumData vaultType;
     ValueType seed = TextValue(L"");           // Blank = the seed the server sent when you joined.
+    ValueType playerId = TextValue(L"");       // Blank = your unique actor id, read from the player list.
     ValueType showNames = BoolValue(true);
     ValueType showAmounts = BoolValue(true);
     ValueType showEnchantments = BoolValue(true);
