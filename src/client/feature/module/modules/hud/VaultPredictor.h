@@ -66,7 +66,9 @@ private:
 
     EnumData vaultType;
     ValueType seed = TextValue(L"");           // Blank = the seed the server sent when you joined.
-    ValueType playerId = TextValue(L"");       // Blank = your unique actor id, read from the player list.
+    ValueType playerId = TextValue(L"");       // Blank (the normal case) = your unique actor id, read from the player list.
+    ValueType notifyEnabled = BoolValue(true);
+    ValueType notifyItems = TextValue(L"heavy_core"); // Comma separated item ids / enchantments to be told about.
     ValueType showNames = BoolValue(true);
     ValueType showAmounts = BoolValue(true);
     ValueType showEnchantments = BoolValue(true);
@@ -88,8 +90,23 @@ private:
     std::unordered_map<std::string, void*> itemCache;
     std::unordered_map<uint64_t, std::chrono::steady_clock::time_point> lastDiag; // Debug Mode, render thread only.
     void* itemCacheRegistry = nullptr;
-    size_t registryOffset = 0; // Where in the Level the item registry pointer was found (0 = not yet).
+    // Where the item registry was found: in which object (0 Level, 1 Minecraft, 2 ClientInstance), at which offset, and
+    // whether the pointer there is the registry itself (0) or points at a pointer to it (1: at +0, 2: at +8).
+    bool registryFound = false;
+    int registryRoot = 0;
+    size_t registryOffset = 0;
+    int registryDeref = 0;
+    size_t registryVecOff = 0x38;
+    size_t registryNameOff = 0x128; // Where the item's id string ("minecraft:...") sits in an Item.
     std::chrono::steady_clock::time_point lastRegistryTry {};
+
+    // Vault type from the vault block's own state bits (render thread only): block -> 0 normal, 1 ominous, -1 unknown.
+    std::unordered_map<const void*, int> ominousByBlock;
+    std::string stateNote;
+    // Notifications (render thread only): vaults already announced, and the parsed list of things to be told about.
+    std::unordered_set<uint64_t> notified;
+    std::wstring notifyParsedFrom;
+    std::vector<std::string> notifyTerms;
 
     // The block scan (render thread only): a rolling sweep over the box around you, a few thousand blocks per frame.
     size_t scanIndex = 0;

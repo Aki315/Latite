@@ -150,6 +150,10 @@ VaultPredictor::VaultPredictor()
                LocalizeString::get("client.textmodule.vaultPredictor.seed.desc"), seed);
     addSetting("playerId", LocalizeString::get("client.textmodule.vaultPredictor.playerId.name"),
                LocalizeString::get("client.textmodule.vaultPredictor.playerId.desc"), playerId);
+    addSetting("notify", LocalizeString::get("client.textmodule.vaultPredictor.notify.name"),
+               LocalizeString::get("client.textmodule.vaultPredictor.notify.desc"), notifyEnabled);
+    addSetting("notifyItems", LocalizeString::get("client.textmodule.vaultPredictor.notifyItems.name"),
+               LocalizeString::get("client.textmodule.vaultPredictor.notifyItems.desc"), notifyItems, "notify"_istrue);
     addSetting("showNames", LocalizeString::get("client.textmodule.vaultPredictor.showNames.name"),
                LocalizeString::get("client.textmodule.vaultPredictor.showNames.desc"), showNames);
     addSetting("showAmounts", LocalizeString::get("client.textmodule.vaultPredictor.showAmounts.name"),
@@ -193,7 +197,9 @@ void VaultPredictor::reset() {
     ignoredIds.clear();
     itemCache.clear();
     itemCacheRegistry = nullptr;
-    registryOffset = 0;
+    registryFound = false;
+    ominousByBlock.clear();
+    notified.clear();
     scanIndex = 0;
     scanSweeps = 0;
     scanVaultsFound = 0;
@@ -314,38 +320,170 @@ bool VaultPredictor::localPlayerId(int64_t& out) const {
 }
 
 namespace {
-    // Does this look like the item registry? A list of item counters at +0x38 (begin) and +0x40 (end), each pointing at an
-    // Item whose id (a HashedString at +0x120) reads "minecraft:...". Every read is guarded.
-    bool plausibleRegistry(const void* reg) {
-        uintptr_t begin = 0, end = 0;
-        if (!reg || !readRaw(reg, 0x38, begin) || !readRaw(reg, 0x40, end)) return false;
-        if (!begin || end <= begin || (end - begin) % 8 != 0) return false;
-        const size_t count = (end - begin) / 8;
-        if (count < 100 || count > 100000) return false;
-
-        int good = 0, tried = 0;
-        for (size_t i = 0; i < count && tried < 12; ++i) {
-            uintptr_t counter = 0, item = 0;
-            if (!readRaw(reinterpret_cast<const void*>(begin), i * 8, counter)) return false;
-            if (!counter || !readRaw(reinterpret_cast<const void*>(counter), 0, item) || !item) continue;
-            ++tried;
-            const uintptr_t str = item + 0x120 + 8; // the std::string inside the HashedString
-            uint64_t size = 0, cap = 0;
-            if (!readRaw(reinterpret_cast<const void*>(str), 16, size) || !readRaw(reinterpret_cast<const void*>(str), 24, cap))
-                continue;
-            if (size < 11 || size > 80 || cap < size || cap > 0x1000) continue;
-            const char* chars = reinterpret_cast<const char*>(str);
-            if (cap >= 16) {
-                uintptr_t ptr = 0;
-                if (!readRaw(reinterpret_cast<const void*>(str), 0, ptr) || !ptr) continue;
-                chars = reinterpret_cast<const char*>(ptr);
-            }
-            struct Prefix {
-                char c[10];
-            } prefix {};
-            if (readRaw(chars, 0, prefix) && std::memcmp(prefix.c, "minecraft:", 10) == 0) ++good;
+    // True when the memory is committed and readable (no exception to pay for when it isn't).
+    bool readableRange(const void* p, size_t size) {
+        if (!p || reinterpret_cast<uintptr_t>(p) < 0x10000) return false;
+        MEMORY_BASIC_INFORMATION mbi {};
+        const char* cur = static_cast<const char*>(p);
+        const char* end = cur + size;
+        while (cur < end) {
+            if (!VirtualQuery(cur, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) return false;
+            if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return false;
+            const char* regionEnd = static_cast<const char*>(mbi.BaseAddress) + mbi.RegionSize;
+            if (regionEnd <= cur) return false;
+            cur = regionEnd;
         }
-        return tried >= 4 && good * 2 >= tried;
+        return true;
+    }
+
+    bool copyBytes(const void* from, void* to, size_t count) {
+        __try {
+            std::memcpy(to, from, count);
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
+    // A std::string at `str` whose text starts with "minecraft:" and is 11 to 80 characters long; copies it to `out`.
+    bool readItemString(const void* str, char* out, size_t outSize) {
+        uint64_t size = 0, cap = 0;
+        if (!readRaw(str, 16, size) || !readRaw(str, 24, cap)) return false;
+        if (size < 11 || size > 80 || cap < size || cap > 0x1000 || size + 1 > outSize) return false;
+        const char* chars = static_cast<const char*>(str);
+        if (cap >= 16) {
+            uintptr_t ptr = 0;
+            if (!readRaw(str, 0, ptr) || !ptr) return false;
+            chars = reinterpret_cast<const char*>(ptr);
+        }
+        if (!copyBytes(chars, out, size)) return false;
+        out[size] = 0;
+        return std::memcmp(out, "minecraft:", 10) == 0;
+    }
+
+    // Where in an Item the id string sits (the layout moves between game versions): the first 8-aligned offset that holds a
+    // std::string reading "minecraft:...". 0 = none.
+    size_t findItemNameOffset(const void* item) {
+        char text[96];
+        for (size_t off = 0x20; off <= 0x300; off += 8) {
+            if (readItemString(static_cast<const char*>(item) + off, text, sizeof(text))) return off;
+        }
+        return 0;
+    }
+
+    // Does `reg` look like the item registry: a vector (begin/end pointers, somewhere in its first 0x100 bytes) of item
+    // counters, each pointing at an Item with a "minecraft:..." id? Every read is guarded. On success `vecOff` is where the
+    // vector sits and `nameOff` where the Items keep their id.
+    bool probeRegistry(const void* reg, size_t& vecOff, size_t& nameOff, size_t& countOut) {
+        uint8_t buf[0x108];
+        if (!readableRange(reg, sizeof(buf)) || !copyBytes(reg, buf, sizeof(buf))) return false;
+        for (size_t vo = 0x08; vo <= 0xF0; vo += 8) {
+            uintptr_t begin = 0, end = 0;
+            std::memcpy(&begin, buf + vo, 8);
+            std::memcpy(&end, buf + vo + 8, 8);
+            if (!begin || end <= begin || (begin & 7) || (end & 7)) continue;
+            const size_t count = (end - begin) / 8;
+            if (count < 100 || count > 100000) continue;
+
+            int good = 0, tried = 0;
+            size_t off = 0;
+            char text[96];
+            for (size_t i = 0; i < count && tried < 12; ++i) {
+                uintptr_t counter = 0, item = 0;
+                if (!readRaw(reinterpret_cast<const void*>(begin), i * 8, counter)) break;
+                if (!counter || !readRaw(reinterpret_cast<const void*>(counter), 0, item) || !item) continue;
+                ++tried;
+                if (!off) {
+                    off = findItemNameOffset(reinterpret_cast<const void*>(item));
+                    if (off) ++good;
+                } else if (readItemString(reinterpret_cast<const char*>(item) + off, text, sizeof(text))) {
+                    ++good;
+                }
+            }
+            if (tried >= 4 && good * 2 >= tried && off) {
+                vecOff = vo;
+                nameOff = off;
+                countOut = count;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // One of the objects the registry can hang off.
+    const void* registryRootObject(int root) {
+        auto* client = SDK::ClientInstance::get();
+        if (!client) return nullptr;
+        if (root == 0) return client->minecraft ? static_cast<const void*>(client->minecraft->getLevel()) : nullptr;
+        if (root == 1) return client->minecraft;
+        return client;
+    }
+
+    // The registry pointer for a remembered place: root object + offset, then the extra step the way it was found.
+    bool registryAt(int root, size_t offset, int deref, void*& out) {
+        const void* obj = registryRootObject(root);
+        uintptr_t p = 0;
+        if (!obj || !readRaw(obj, offset, p) || !p) return false;
+        if (deref == 1 && !readRaw(reinterpret_cast<const void*>(p), 0, p)) return false;
+        if (deref == 2 && !readRaw(reinterpret_cast<const void*>(p), 8, p)) return false;
+        out = reinterpret_cast<void*>(p);
+        return out != nullptr;
+    }
+
+    // The state bits of a block, read the way the vault's own code reads them: the block's data is a 16-bit number at
+    // Block + 0x120, and the block type (Block + 0x68) keeps a map at +0x1D8 from each state to where its bits sit (the
+    // number of bits at +0x2C of a map node, the highest bit at +0x30). Returns the number of states, -1 if unreadable.
+    struct StateBits {
+        uint64_t key;
+        int bits;
+        int top;
+        int value;
+    };
+
+    int readBlockStates(const void* block, StateBits* out, int maxOut) {
+        __try {
+            const uintptr_t b = reinterpret_cast<uintptr_t>(block);
+            const uint16_t data = *reinterpret_cast<const uint16_t*>(b + 0x120);
+            const uintptr_t legacy = *reinterpret_cast<const uintptr_t*>(b + 0x68);
+            if (!legacy) return -1;
+            const uintptr_t head = *reinterpret_cast<const uintptr_t*>(legacy + 0x1D8);
+            if (!head) return -1;
+            uintptr_t pending[64];
+            int sp = 0, n = 0, guard = 0;
+            pending[sp++] = *reinterpret_cast<const uintptr_t*>(head + 8);
+            while (sp > 0 && guard++ < 512) {
+                const uintptr_t node = pending[--sp];
+                if (!node || *reinterpret_cast<const uint8_t*>(node + 25) != 0) continue; // empty
+                const int bits = static_cast<int>(*reinterpret_cast<const uint32_t*>(node + 44));
+                const int top = static_cast<int>(*reinterpret_cast<const uint8_t*>(node + 48));
+                if (n < maxOut && bits >= 1 && bits <= 16 && top >= bits - 1 && top < 16) {
+                    out[n].key = *reinterpret_cast<const uint64_t*>(node + 32);
+                    out[n].bits = bits;
+                    out[n].top = top;
+                    out[n].value = (0xFFFFu >> (16 - bits)) & (data >> (top - bits + 1));
+                    ++n;
+                }
+                if (sp < 62) {
+                    pending[sp++] = *reinterpret_cast<const uintptr_t*>(node);
+                    pending[sp++] = *reinterpret_cast<const uintptr_t*>(node + 16);
+                }
+            }
+            return n;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return -1;
+        }
+    }
+
+    // A vault has three states: its direction (4 values), vault_state (4 values) and ominous (on/off). The only one that
+    // takes a single bit is therefore "ominous". 1 ominous, 0 normal, -1 can't tell.
+    int ominousFromStates(StateBits const* s, int n) {
+        int found = 0, value = -1;
+        for (int i = 0; i < n; ++i) {
+            if (s[i].bits != 1) continue;
+            ++found;
+            value = s[i].value;
+        }
+        return found == 1 ? value : -1;
     }
 } // namespace
 
@@ -357,60 +495,92 @@ void* VaultPredictor::findItemCounter(std::string const& id) {
         return nullptr;
     }
 
-    // The item registry, the same one WAILA reads its tool icons from: a list of item counters, each pointing at an Item.
-    // It is looked for at the known offset (Level + 0x198) and, if that doesn't hold up (the Level layout changes between
-    // game versions), anywhere in the first 2 KB of the Level; the offset that works is remembered.
+    // The item registry (what WAILA reads its tool icons from): a list of item counters, each pointing at an Item. Its place
+    // in the game's objects has moved between versions, so when the remembered place stops holding up, the Level, Minecraft
+    // and ClientInstance objects are searched for it; the place that works is remembered.
     void* registry = nullptr;
-    uintptr_t cached = 0;
-    if (registryOffset && readRaw(level, registryOffset, cached) && cached && reinterpret_cast<void*>(cached) == itemCacheRegistry &&
-        !itemCache.empty()) {
-        registry = reinterpret_cast<void*>(cached);
-    } else {
+    size_t vecOff = 0x38;
+    if (registryFound) {
+        void* cur = nullptr;
+        if (registryAt(registryRoot, registryOffset, registryDeref, cur) && cur == itemCacheRegistry && !itemCache.empty()) registry = cur;
+    }
+    if (!registry) {
         const auto now = std::chrono::steady_clock::now();
-        if (lastRegistryTry.time_since_epoch().count() != 0 && now - lastRegistryTry < std::chrono::seconds(2)) return nullptr;
+        if (lastRegistryTry.time_since_epoch().count() != 0 && now - lastRegistryTry < std::chrono::seconds(10)) return nullptr;
         lastRegistryTry = now;
-        registryOffset = 0;
-        auto tryOffset = [&](size_t off) {
-            uintptr_t p = 0;
-            if (!readRaw(level, off, p) || !p || !plausibleRegistry(reinterpret_cast<void*>(p))) return false;
-            registry = reinterpret_cast<void*>(p);
-            registryOffset = off;
-            return true;
-        };
-        if (!tryOffset(0x198)) {
-            for (size_t off = 0x40; off <= 0x800 && !registry; off += 8) tryOffset(off);
+        registryFound = false;
+
+        size_t nameOff = 0;
+        size_t looked = 0;
+        const char* const rootNames[] = { "Level", "Minecraft", "ClientInstance" };
+        for (int root = 0; root < 3 && !registryFound; ++root) {
+            const void* obj = registryRootObject(root);
+            if (!obj) continue;
+            for (size_t off = 0x08; off <= 0x3000 && !registryFound; off += 8) {
+                uintptr_t p = 0;
+                if (!readableRange(static_cast<const char*>(obj) + off, 8) || !readRaw(obj, off, p) || p < 0x10000) continue;
+                ++looked;
+                for (int deref = 0; deref < 3 && !registryFound; ++deref) {
+                    uintptr_t c = p;
+                    if (deref == 1) {
+                        if (!readableRange(reinterpret_cast<const void*>(p), 8) || !readRaw(reinterpret_cast<const void*>(p), 0, c)) continue;
+                    } else if (deref == 2) {
+                        if (!readableRange(reinterpret_cast<const void*>(p), 16) || !readRaw(reinterpret_cast<const void*>(p), 8, c)) continue;
+                    }
+                    if (c < 0x10000) continue;
+                    size_t vo = 0, no = 0, cnt = 0;
+                    if (probeRegistry(reinterpret_cast<const void*>(c), vo, no, cnt)) {
+                        registry = reinterpret_cast<void*>(c);
+                        registryFound = true;
+                        registryRoot = root;
+                        registryOffset = off;
+                        registryDeref = deref;
+                        vecOff = vo;
+                        nameOff = no;
+                        registryNote = std::format("found in {} at +0x{:X}{} (list at +0x{:X}, item ids at +0x{:X}, {} slots)",
+                                                   rootNames[root], off, deref == 0 ? "" : deref == 1 ? " -> +0" : " -> +8", vo, no, cnt);
+                    }
+                }
+            }
         }
-        if (!registry) {
-            registryNote = "no item registry found in the Level (the known offset 0x198 and a scan of the first 2 KB both failed)";
+        if (!registryFound) {
+            registryNote = std::format("no item registry found: looked at {} pointers in the Level, Minecraft and ClientInstance objects", looked);
             return nullptr;
         }
-    }
-
-    if (registry != itemCacheRegistry || itemCache.empty()) {
+        registryNameOff = nameOff;
         itemCache.clear();
         itemCacheRegistry = registry;
-        auto itemCounters = reinterpret_cast<void***>(reinterpret_cast<uintptr_t>(registry) + 0x38);
-        if (!itemCounters[0] || !itemCounters[1]) {
-            registryNote = "the item list (registry + 0x38) is empty";
+        registryVecOff = vecOff;
+    } else {
+        vecOff = registryVecOff;
+    }
+
+    if (itemCache.empty()) {
+        itemCacheRegistry = registry;
+        uintptr_t begin = 0, end = 0;
+        if (!readRaw(registry, vecOff, begin) || !readRaw(registry, vecOff + 8, end) || !begin || end <= begin) {
+            registryNote = "the item list is empty";
+            registryFound = false;
             return nullptr;
         }
         size_t slots = 0, withItem = 0;
         std::string examples;
-        for (auto current = itemCounters[0]; current < itemCounters[1]; ++current) {
+        char text[96];
+        for (uintptr_t current = begin; current < end; current += 8) {
             ++slots;
-            auto counter = *current;
-            auto item = counter ? *reinterpret_cast<SDK::Item**>(counter) : nullptr;
-            if (!item) continue;
+            uintptr_t counter = 0, item = 0;
+            if (!readRaw(reinterpret_cast<const void*>(current), 0, counter) || !counter) continue;
+            if (!readRaw(reinterpret_cast<const void*>(counter), 0, item) || !item) continue;
             ++withItem;
-            const std::string name = item->namespacedId.getString();
-            if (name.empty()) continue;
-            itemCache.emplace(name, counter);
+            if (!readItemString(reinterpret_cast<const char*>(item) + registryNameOff, text, sizeof(text))) continue;
+            const std::string name = text;
+            itemCache.emplace(name, reinterpret_cast<void*>(counter));
             // Also under the short name, in case the game keeps the ids without "minecraft:".
-            if (name.rfind("minecraft:", 0) == 0) itemCache.emplace(name.substr(10), counter);
+            itemCache.emplace(name.substr(10), reinterpret_cast<void*>(counter));
             if (examples.size() < 60) examples += (examples.empty() ? "" : ", ") + name;
         }
-        registryNote = std::format("found at Level + 0x{:X}: {} slot(s), {} with an item, {} names read (e.g. {})", registryOffset,
-                                   slots, withItem, itemCache.size(), examples.empty() ? std::string("none") : examples);
+        registryNote += std::format("; {} slot(s), {} with an item, {} names read (e.g. {})", slots, withItem, itemCache.size() / 2,
+                                    examples.empty() ? std::string("none") : examples);
     }
 
     auto it = itemCache.find(id.find(':') == std::string::npos ? "minecraft:" + id : id);
@@ -488,7 +658,25 @@ namespace {
     struct Column {
         vault_nbt::ItemInfo item;
         std::vector<Line> lines;
+        bool hot = false; // one of the things the notify list asks about
     };
+
+    // "Heavy Core", "minecraft:heavy_core" and "heavycore" all read the same.
+    std::string normalizeTerm(std::string s) {
+        std::string out;
+        for (char c : s) {
+            if (c == ' ' || c == '-' || c == '_') continue;
+            out += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        if (out.rfind("minecraft:", 0) == 0) out.erase(0, 10);
+        return out;
+    }
+
+    bool termMatches(std::vector<std::string> const& terms, std::string const& name) {
+        if (terms.empty() || name.empty()) return false;
+        const std::string n = normalizeTerm(name);
+        return std::find(terms.begin(), terms.end(), n) != terms.end();
+    }
 
     struct IconJob {
         std::string item;
@@ -534,6 +722,27 @@ void VaultPredictor::onRenderLayer(Event& evG) {
     const bool amounts = std::get<BoolValue>(showAmounts);
     const bool enchants = std::get<BoolValue>(showEnchantments);
     const bool background = std::get<BoolValue>(showBackground);
+
+    // The notify list: names separated by commas, parsed again only when the text changes.
+    const bool notifyOn = std::get<BoolValue>(notifyEnabled);
+    {
+        auto const& raw = std::get<TextValue>(notifyItems).str;
+        if (raw != notifyParsedFrom) {
+            notifyParsedFrom = raw;
+            notifyTerms.clear();
+            std::string text = util::WStrToStr(raw), part;
+            text += ',';
+            for (char c : text) {
+                if (c == ',' || c == ';' || c == '\n') {
+                    const std::string term = normalizeTerm(part);
+                    if (!term.empty()) notifyTerms.push_back(term);
+                    part.clear();
+                } else {
+                    part += c;
+                }
+            }
+        }
+    }
     const float baseText = std::clamp(static_cast<float>(std::get<FloatValue>(textSize)), 8.f, 60.f);
     const float baseIcon = std::clamp(static_cast<float>(std::get<FloatValue>(iconSize)), 8.f, 128.f);
     const auto font = Renderer::FontSelection::SecondaryLight;
@@ -581,7 +790,35 @@ void VaultPredictor::onRenderLayer(Event& evG) {
         bool ominous = tableKnown && vault_nbt::isOminous(data);
         std::string typeSource = tableKnown ? "loot table sent by the server" : "";
         if (!tableKnown) {
-            if (pick.entry.sawOminousOnly != pick.entry.sawNormalOnly) {
+            // The vault block says it itself: it has an "ominous" state.
+            int stateOminous = -1;
+            if (SDK::Block* vaultBlock = region->getBlock(pick.entry.pos)) {
+                auto cached = ominousByBlock.find(vaultBlock);
+                if (cached != ominousByBlock.end()) {
+                    stateOminous = cached->second;
+                } else {
+                    StateBits bits[16];
+                    const int n = readBlockStates(vaultBlock, bits, 16);
+                    stateOminous = n > 0 ? ominousFromStates(bits, n) : -1;
+                    if (ominousByBlock.size() > 512) ominousByBlock.clear();
+                    ominousByBlock.emplace(vaultBlock, stateOminous);
+                    if (std::get<BoolValue>(debugMode)) {
+                        std::string list;
+                        for (int i = 0; i < n; ++i)
+                            list += std::format("{}{{key 0x{:X}, {} bit(s) ending at bit {}, value {}}}", i ? ", " : "", bits[i].key,
+                                                bits[i].bits, bits[i].top, bits[i].value);
+                        Logger::Info("[VaultPredictor] vault block states ({}): {} => ominous {}", n, list.empty() ? "none" : list,
+                                     stateOminous < 0 ? "unknown" : stateOminous ? "yes" : "no");
+                    }
+                }
+            }
+            if (stateOminous >= 0) {
+                typeKnown = true;
+                ominous = stateOminous == 1;
+                typeSource = "read from the vault block's ominous state";
+                if (pick.entry.sawOminousOnly != pick.entry.sawNormalOnly && pick.entry.sawOminousOnly != ominous)
+                    typeSource += " (the spinning item points to the other type)";
+            } else if (pick.entry.sawOminousOnly != pick.entry.sawNormalOnly) {
                 typeKnown = true;
                 ominous = pick.entry.sawOminousOnly;
                 typeSource = "worked out from the item spinning in the vault";
@@ -594,6 +831,53 @@ void VaultPredictor::onRenderLayer(Event& evG) {
         if (typeKnown) {
             if (wanted == TypeNormal && ominous) continue;
             if (wanted == TypeOminous && !ominous) continue;
+        }
+
+        // Tell about a vault whose loot has something from the notify list, once per vault, whether or not it is on screen.
+        if (notifyOn && !notifyTerms.empty() && (canPredict || !data.toEject.empty())) {
+            auto announce = [&](std::vector<std::wstring> const& found, bool om, bool known) {
+                if (found.empty()) return;
+                const uint64_t nk = keyOf(pick.entry.pos.x, pick.entry.pos.y, pick.entry.pos.z) * 2 + (om ? 1 : 0);
+                if (!notified.insert(nk).second) return;
+                if (notified.size() > 4096) notified.clear();
+                std::wstring list;
+                for (auto const& n : found) list += (list.empty() ? L"" : L", ") + n;
+                const std::wstring where = known ? (om ? L"an ominous vault" : L"a vault")
+                                                 : (om ? L"a vault, if it is ominous" : L"a vault, if it is normal");
+                const std::wstring msg = list + L" in " + where + L" (" + std::to_wstring(static_cast<int>(std::lround(pick.dist))) + L"m)";
+                Latite::getNotifications().push(msg);
+                Latite::get().getClientMessageQueue().push(util::WFormat(msg));
+            };
+            if (!data.toEject.empty()) {
+                std::vector<std::wstring> found;
+                for (auto const& item : data.toEject) {
+                    bool hit = termMatches(notifyTerms, item.name);
+                    for (auto const& e : item.enchants) hit = hit || termMatches(notifyTerms, vault_nbt::enchantName(e.id));
+                    if (hit) found.push_back(util::StrToWStr(vault_nbt::prettyName(item.name)));
+                }
+                announce(found, ominous, typeKnown);
+            } else {
+                auto scanPredicted = [&](bool om, bool known) {
+                    const auto result = vault_loot::predict(calcSeed, calcPlayer, pick.entry.pos.x, pick.entry.pos.y,
+                                                            pick.entry.pos.z, om);
+                    std::vector<std::wstring> found;
+                    for (auto const& s : result.items) {
+                        if (termMatches(notifyTerms, s.item)) {
+                            found.push_back(util::StrToWStr(vault_nbt::prettyName(s.item)));
+                        } else if (!s.enchant.empty() && termMatches(notifyTerms, s.enchant)) {
+                            found.push_back(util::StrToWStr(vault_nbt::prettyName(s.enchant)) + L" " +
+                                            util::StrToWStr(vault_nbt::roman(s.enchantLevel)) + L" book");
+                        }
+                    }
+                    announce(found, om, known);
+                };
+                if (typeKnown) {
+                    scanPredicted(ominous, true);
+                } else {
+                    scanPredicted(false, false);
+                    scanPredicted(true, false);
+                }
+            }
         }
 
         // Above the vault, like a name tag. It shrinks with distance so far vaults don't fill the screen.
@@ -642,18 +926,28 @@ void VaultPredictor::onRenderLayer(Event& evG) {
                 }
                 cols.push_back(std::move(col));
             };
-            for (auto const& item : data.toEject) addColumn(item);
+            const d2d::Color hotColor = d2d::Color::RGB(255, 215, 0);
+            auto makeHot = [&]() {
+                cols.back().hot = true;
+                if (!cols.back().lines.empty()) cols.back().lines[0].color = hotColor;
+            };
+            for (auto const& item : data.toEject) {
+                addColumn(item);
+                bool hit = notifyOn && termMatches(notifyTerms, item.name);
+                for (auto const& e : item.enchants) hit = hit || (notifyOn && termMatches(notifyTerms, vault_nbt::enchantName(e.id)));
+                if (hit) makeHot();
+            }
 
             std::wstring note;
             bool predicted = false;
             if (cols.empty()) {
                 if (!typeKnown && !canPredict) {
                     if (!haveCalcSeed) note = L"no valid world seed (see the World Seed setting)";
-                    else note = L"player id unknown (see the Player ID setting)";
+                    else note = L"player id not found yet (join a world; or type it in Player ID)";
                 } else if (!haveCalcSeed) {
                     note = L"no valid world seed (see the World Seed setting)";
                 } else if (!havePlayer) {
-                    note = L"player id unknown (see the Player ID setting)";
+                    note = L"player id not found yet (join a world; or type it in Player ID)";
                 } else {
                     const auto result = vault_loot::predict(calcSeed, calcPlayer, pick.entry.pos.x, pick.entry.pos.y,
                                                             pick.entry.pos.z, box.ominous);
@@ -662,6 +956,7 @@ void VaultPredictor::onRenderLayer(Event& evG) {
                         info.name = s.item;
                         info.count = s.count;
                         addColumn(info);
+                        if (notifyOn && (termMatches(notifyTerms, s.item) || termMatches(notifyTerms, s.enchant))) makeHot();
                         auto& lines = cols.back().lines;
                         if (names && !s.variant.empty()) {
                             if (s.item == "minecraft:ominous_bottle") {
@@ -700,6 +995,12 @@ void VaultPredictor::onRenderLayer(Event& evG) {
             else if (boxes.size() > 1) title = std::wstring(box.ominous ? L"If ominous: " : L"If normal: ") + distText;
             else title = L"Vault " + distText;
             if (predicted) title += L" (predicted)";
+            for (auto const& col : cols) {
+                if (col.hot) {
+                    title = L"! " + title;
+                    break;
+                }
+            }
             const d2d::Color titleColor = box.ominous ? d2d::Color::RGB(120, 200, 255) : d2d::Color::RGB(255, 170, 0);
 
             const float lineH = std::max(mc.getTextSize(L"Ag", font, ts, false).y, 6.f);
