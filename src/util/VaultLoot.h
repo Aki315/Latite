@@ -7,10 +7,9 @@
 //      player's unique actor id, then from the vault position. The low 32 bits of its first output seed a Mersenne Twister
 //      (MT19937, the game's loot random).
 //   2. The vault's loot table (reward / reward_ominous) is rolled with that random the way the game rolls any loot table.
-// Not every item can be worked out: enchanting gear (enchant_with_levels) and set_damage use code that isn't decoded
-// yet. When one of them is reached, the prediction stops there (complete = false): the items before it, and the item
-// itself (without its enchantments), are still right; whatever would come after it is unknown.
-// An enchanted book is fine: the book is certain, the enchantment on it isn't known, and the loot after it is right.
+// Enchanted items: the item is certain and the loot after it is right, but which enchantments it has isn't known (each
+// takes a fixed number of draws that were found from real vaults: 2 for a book, 1 for gear). set_damage (the shield) isn't
+// decoded yet: there the prediction stops (complete = false) and whatever would come after it is unknown.
 #include <cmath>
 #include <cstdint>
 #include <initializer_list>
@@ -93,7 +92,7 @@ namespace vault_loot {
             float nextFloat() { return static_cast<float>(static_cast<double>(raw()) * 2.328306436538696e-10); }
         };
 
-        enum class Fn { SetCount, SetPotion, Amplifier, EnchantBook, Undecoded };
+        enum class Fn { SetCount, SetPotion, Amplifier, EnchantBook, EnchantLevels, Undecoded };
         struct Func {
             Fn kind;
             float min = 0, max = 0;
@@ -116,6 +115,7 @@ namespace vault_loot {
         inline Func potion(const char* id) { return { Fn::SetPotion, 0, 0, id }; }
         inline Func amplifier(float a, float b) { return { Fn::Amplifier, a, b, "" }; }
         inline Func enchantBook() { return { Fn::EnchantBook, 0, 0, "" }; }
+        inline Func enchantLevels() { return { Fn::EnchantLevels, 0, 0, "" }; }
         inline Func undecoded(const char* what) { return { Fn::Undecoded, 0, 0, what }; }
         inline Entry item(const char* n, int w, std::initializer_list<Func> f = {}) { return { n, w, false, f }; }
         inline Entry nested(const char* n, int w) { return { n, w, true, {} }; }
@@ -146,15 +146,15 @@ namespace vault_loot {
                   {
                       item("minecraft:emerald", 3, { count(2, 4) }),
                       item("minecraft:shield", 3, { undecoded("set_damage") }),
-                      item("minecraft:bow", 3, { undecoded("enchant_with_levels") }),
-                      item("minecraft:crossbow", 2, { undecoded("enchant_with_levels") }),
-                      item("minecraft:iron_axe", 2, { undecoded("enchant_with_levels") }),
-                      item("minecraft:iron_chestplate", 2, { undecoded("enchant_with_levels") }),
+                      item("minecraft:bow", 3, { enchantLevels() }),
+                      item("minecraft:crossbow", 2, { enchantLevels() }),
+                      item("minecraft:iron_axe", 2, { enchantLevels() }),
+                      item("minecraft:iron_chestplate", 2, { enchantLevels() }),
                       item("minecraft:golden_carrot", 2, { count(1, 2) }),
                       item("minecraft:book", 2, { enchantBook() }),
                       item("minecraft:book", 2, { enchantBook() }),
-                      item("minecraft:diamond_chestplate", 1, { undecoded("enchant_with_levels") }),
-                      item("minecraft:diamond_axe", 1, { undecoded("enchant_with_levels") }),
+                      item("minecraft:diamond_chestplate", 1, { enchantLevels() }),
+                      item("minecraft:diamond_axe", 1, { enchantLevels() }),
                   } },
             };
             static const Table rewardUnique = {
@@ -187,10 +187,10 @@ namespace vault_loot {
                   {
                       item("minecraft:emerald_block", 5),
                       item("minecraft:iron_block", 4),
-                      item("minecraft:crossbow", 4, { undecoded("enchant_with_levels") }),
+                      item("minecraft:crossbow", 4, { enchantLevels() }),
                       item("minecraft:golden_apple", 3),
-                      item("minecraft:diamond_axe", 3, { undecoded("enchant_with_levels") }),
-                      item("minecraft:diamond_chestplate", 3, { undecoded("enchant_with_levels") }),
+                      item("minecraft:diamond_axe", 3, { enchantLevels() }),
+                      item("minecraft:diamond_chestplate", 3, { enchantLevels() }),
                       item("minecraft:book", 2, { enchantBook() }),
                       item("minecraft:book", 2, { enchantBook() }),
                       item("minecraft:book", 2, { enchantBook() }),
@@ -240,6 +240,12 @@ namespace vault_loot {
                     case Fn::SetCount: s.count = rangeValue(fn.min, fn.max); break;
                     case Fn::Amplifier: s.variant = std::to_string(rangeValue(fn.min, fn.max)); break;
                     case Fn::SetPotion: s.variant = fn.text; break;
+                    case Fn::EnchantLevels:
+                        // Takes exactly ONE draw: found from one real vault (a normal vault's diamond axe), where the
+                        // three items rolled after it only match after skipping one. Not yet confirmed on more vaults.
+                        (void)rng.raw();
+                        s.details = true;
+                        break;
                     case Fn::EnchantBook:
                         // Takes exactly two draws (which enchantment, which level; found from a real vault: the loot that
                         // follows only matches after two). Which enchantment it picks isn't known yet.

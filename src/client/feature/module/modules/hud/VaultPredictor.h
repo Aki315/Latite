@@ -46,6 +46,10 @@ private:
         BlockPos pos {};
         vault_nbt::VaultData data;
         std::chrono::steady_clock::time_point seen {};
+        // The server doesn't send the loot table, but the item spinning in the vault comes from it: seeing an item that only
+        // one of the two tables can give tells which vault this is. Kept across updates.
+        bool sawNormalOnly = false;
+        bool sawOminousOnly = false;
     };
 
     void reset();

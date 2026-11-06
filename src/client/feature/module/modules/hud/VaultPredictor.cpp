@@ -94,6 +94,25 @@ namespace {
         return block->legacyBlock->namespacedId.getString();
     }
 
+    // Items only one vault's loot table can produce (the display item is picked from it).
+    bool normalOnlyItem(std::string const& n) {
+        static const char* const items[] = { "honey_bottle", "iron_ingot", "golden_carrot", "bolt_armor_trim_smithing_template",
+                                             "guster_banner_pattern", "music_disc_precipice", "trident", "shield", "iron_axe",
+                                             "iron_chestplate", "bow" };
+        for (auto const* i : items)
+            if (n == i || n == std::string("minecraft:") + i) return true;
+        return false;
+    }
+
+    bool ominousOnlyItem(std::string const& n) {
+        static const char* const items[] = { "emerald_block", "iron_block", "diamond_block", "enchanted_golden_apple",
+                                             "flow_armor_trim_smithing_template", "flow_banner_pattern", "music_disc_creator",
+                                             "heavy_core" };
+        for (auto const* i : items)
+            if (n == i || n == std::string("minecraft:") + i) return true;
+        return false;
+    }
+
     enum class SeedStatus { Empty, Ok, Invalid, OutOfRange };
 
     // The whole text has to be one signed 64-bit whole number (spaces around it are fine). Nothing is ever turned into 0.
@@ -242,6 +261,10 @@ void VaultPredictor::handleBlockActorData(SDK::Packet* pkt) {
     if (vaults.size() > kMaxVaults) vaults.clear();
     auto& entry = vaults[keyOf(x, y, z)];
     entry.pos = BlockPos { x, y, z };
+    if (data.hasDisplay) {
+        if (normalOnlyItem(data.display.name)) entry.sawNormalOnly = true;
+        if (ominousOnlyItem(data.display.name)) entry.sawOminousOnly = true;
+    }
     // An update that leaves a field out must not wipe what an earlier update said about it.
     if (data.lootTable.empty()) data.lootTable = entry.data.lootTable;
     if (data.overrideLootTable.empty()) data.overrideLootTable = entry.data.overrideLootTable;
@@ -401,8 +424,23 @@ void VaultPredictor::onRenderLayer(Event& evG) {
         if (!blockName.empty() && blockName != "minecraft:vault") continue;
 
         auto const& data = pick.entry.data;
-        const bool typeKnown = !data.lootTable.empty() || !data.overrideLootTable.empty();
-        const bool ominous = typeKnown && vault_nbt::isOminous(data);
+        // The type: the loot table when the server sends it; otherwise the one the spinning item points to; otherwise, if
+        // the Vault Type setting is Normal or Ominous, that.
+        const bool tableKnown = !data.lootTable.empty() || !data.overrideLootTable.empty();
+        bool typeKnown = tableKnown;
+        bool ominous = tableKnown && vault_nbt::isOminous(data);
+        std::string typeSource = tableKnown ? "loot table sent by the server" : "";
+        if (!tableKnown) {
+            if (pick.entry.sawOminousOnly != pick.entry.sawNormalOnly) {
+                typeKnown = true;
+                ominous = pick.entry.sawOminousOnly;
+                typeSource = "worked out from the item spinning in the vault";
+            } else if (wanted != TypeBoth) {
+                typeKnown = true;
+                ominous = wanted == TypeOminous;
+                typeSource = "taken from the Vault Type setting";
+            }
+        }
         if (typeKnown) {
             if (wanted == TypeNormal && ominous) continue;
             if (wanted == TypeOminous && !ominous) continue;
@@ -441,7 +479,7 @@ void VaultPredictor::onRenderLayer(Event& evG) {
         bool predictedShown = false;
         if (cols.empty()) {
             if (!typeKnown) {
-                note = L"vault type unknown";
+                note = L"vault type unknown: wait for the vault item to change, or set Vault Type";
             } else if (!haveCalcSeed) {
                 note = L"no valid world seed (see the World Seed setting)";
             } else if (!havePlayer) {
@@ -584,7 +622,8 @@ void VaultPredictor::onRenderLayer(Event& evG) {
                     "  HUD: {}",
                     haveSeed ? std::format("OK ({})", worldSeed) : std::string("NOT RECEIVED (join the world again with the mod loaded)"),
                     manual, match, pick.entry.pos.x, pick.entry.pos.y, pick.entry.pos.z,
-                    typeKnown ? (ominous ? "Ominous" : "Normal") : "UNKNOWN (the server sends no loot table for it)",
+                    typeKnown ? std::format("{} ({})", ominous ? "Ominous" : "Normal", typeSource)
+                              : std::string("UNKNOWN (no loot table sent; no item seen yet that only one type has)"),
                     havePlayer ? std::format("{}", calcPlayer) : std::string("UNKNOWN (set the Player ID setting)"),
                     data.hasEjectField ? std::to_string(data.toEject.size()) + " item(s) sent" : std::string("not sent"),
                     predictedShown ? std::format("{} column(s) calculated (seed {} used)", cols.size(), calcSeed)
