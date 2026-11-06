@@ -62,16 +62,21 @@ bool PlayerInfoCommand::execute(std::string const label, std::vector<std::string
         return true;
     }
 
+    // The raw bytes of every player's entry (the first 24), to the log: used to find where a field moved after a game update.
     if (!args.empty() && util::ToLower(args[0]) == "dump") {
-        auto& first = players->begin()->second;
-        const auto* bytes = reinterpret_cast<const uint8_t*>(&first);
-        for (size_t row = 0; row < 0xA8; row += 16) {
-            std::string line = std::format("+0x{:03X}:", row);
-            for (size_t i = row; i < std::min<size_t>(row + 16, 0xA8); ++i) line += std::format(" {:02X}", bytes[i]);
-            Logger::Info("[PlayerInfo] {}", line);
+        size_t written = 0;
+        for (auto& [uuid, entry] : *players) {
+            if (written++ >= 24) break;
+            const std::string name = entry.name;
+            Logger::Info("[PlayerInfo] player {} id {}", name, entry.uniqueId);
+            const auto* bytes = reinterpret_cast<const uint8_t*>(&entry);
+            for (size_t row = 0; row < 0xD0; row += 16) {
+                std::string line = std::format("+0x{:03X}:", row);
+                for (size_t i = row; i < row + 16; ++i) line += std::format(" {:02X}", bytes[i]);
+                Logger::Info("[PlayerInfo] {}", line);
+            }
         }
-        const std::string firstName = first.name;
-        message(std::format("Wrote the first player's entry ({}) to the log.", firstName));
+        message(std::format("Wrote {} player entries to the log (latest.log).", written));
         return true;
     }
 
@@ -96,8 +101,11 @@ bool PlayerInfoCommand::execute(std::string const label, std::vector<std::string
 
         std::string skin;
         if (auto const* id = entry.skin.getId()) skin = *id;
-        rows.push_back({ std::move(name), platformName(entry.buildPlatform), entry.isHost, entry.uniqueId,
-                         std::move(skin) });
+        // The platform is only shown when it is a real value: on 1.26.60 the field has moved and 0x78 now reads 0. The host
+        // flag overlaps the skin there, so it isn't shown at all until its new position is found (".playerinfo dump").
+        const int32_t platform = entry.buildPlatform;
+        rows.push_back({ std::move(name), platform >= 1 && platform <= 14 ? platformName(platform) : std::string("?"), false,
+                         entry.uniqueId, std::move(skin) });
     }
     if (rows.empty()) {
         message(L"No player matches that name.", true);
@@ -106,8 +114,8 @@ bool PlayerInfoCommand::execute(std::string const label, std::vector<std::string
     std::sort(rows.begin(), rows.end(), [](Row const& l, Row const& r) { return util::ToLower(l.name) < util::ToLower(r.name); });
 
     for (auto const& row : rows) {
-        print(std::format("&aName: {}&r, &dPlatform: {}&r, &9Is Host: {}&r, &eActor Unique ID: {}&r, &bSkin Id: {}",
-                          row.name, row.platform, row.host ? "Yes" : "No", row.uniqueId, row.skinId));
+        print(std::format("&aName: {}&r, &dPlatform: {}&r, &9Is Host: ?&r, &eActor Unique ID: {}&r, &bSkin Id: {}", row.name,
+                          row.platform, row.uniqueId, row.skinId));
     }
     return true;
 }
