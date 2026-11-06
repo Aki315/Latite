@@ -307,27 +307,47 @@ bool VaultPredictor::localPlayerId(int64_t& out) const {
 void* VaultPredictor::findItemCounter(std::string const& id) {
     auto* client = SDK::ClientInstance::get();
     auto* level = client && client->minecraft ? client->minecraft->getLevel() : nullptr;
-    if (!level) return nullptr;
+    if (!level) {
+        registryNote = "no level";
+        return nullptr;
+    }
 
     // The item registry, the same one WAILA reads its tool icons from: a list of item counters, each pointing at an Item.
     void* registry = *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(level) + 0x198);
-    if (!registry) return nullptr;
+    if (!registry) {
+        registryNote = "the item registry pointer (Level + 0x198) is null";
+        return nullptr;
+    }
 
     if (registry != itemCacheRegistry || itemCache.empty()) {
         itemCache.clear();
         itemCacheRegistry = registry;
         auto itemCounters = reinterpret_cast<void***>(reinterpret_cast<uintptr_t>(registry) + 0x38);
-        if (!itemCounters[0] || !itemCounters[1]) return nullptr;
+        if (!itemCounters[0] || !itemCounters[1]) {
+            registryNote = "the item list (registry + 0x38) is empty";
+            return nullptr;
+        }
+        size_t slots = 0, withItem = 0;
+        std::string examples;
         for (auto current = itemCounters[0]; current < itemCounters[1]; ++current) {
+            ++slots;
             auto counter = *current;
             auto item = counter ? *reinterpret_cast<SDK::Item**>(counter) : nullptr;
             if (!item) continue;
+            ++withItem;
             const std::string name = item->namespacedId.getString();
-            if (!name.empty()) itemCache.emplace(name, counter);
+            if (name.empty()) continue;
+            itemCache.emplace(name, counter);
+            // Also under the short name, in case the game keeps the ids without "minecraft:".
+            if (name.rfind("minecraft:", 0) == 0) itemCache.emplace(name.substr(10), counter);
+            if (examples.size() < 60) examples += (examples.empty() ? "" : ", ") + name;
         }
+        registryNote = std::format("{} slot(s), {} with an item, {} names read (e.g. {})", slots, withItem, itemCache.size(),
+                                   examples.empty() ? std::string("none") : examples);
     }
 
     auto it = itemCache.find(id.find(':') == std::string::npos ? "minecraft:" + id : id);
+    if (it == itemCache.end()) it = itemCache.find(id);
     return it == itemCache.end() ? nullptr : it->second;
 }
 
@@ -619,6 +639,7 @@ void VaultPredictor::onRenderLayer(Event& evG) {
                     "  Player id: {}\n"
                     "  Server reward data (items_to_eject): {}\n"
                     "  Predicted items: {}\n"
+                    "  Icons (last frame): {}\n"
                     "  HUD: {}",
                     haveSeed ? std::format("OK ({})", worldSeed) : std::string("NOT RECEIVED (join the world again with the mod loaded)"),
                     manual, match, pick.entry.pos.x, pick.entry.pos.y, pick.entry.pos.z,
@@ -628,6 +649,7 @@ void VaultPredictor::onRenderLayer(Event& evG) {
                     data.hasEjectField ? std::to_string(data.toEject.size()) + " item(s) sent" : std::string("not sent"),
                     predictedShown ? std::format("{} column(s) calculated (seed {} used)", cols.size(), calcSeed)
                                    : std::string("none"),
+                    iconReport.empty() ? std::string("not drawn yet") : iconReport,
                     cols.empty() ? "title and note only (no rewards to draw)" : "rewards drawn");
             }
         }
@@ -635,9 +657,19 @@ void VaultPredictor::onRenderLayer(Event& evG) {
 
     // The icons: an item stack built from a vault block, pointed at each item in turn (the way WAILA draws its tool
     // icons). Without the block (chunk not loaded on your side) the icons are skipped and the text stays.
-    if (!jobs.empty() && iconBlock && Signatures::ItemStackVtable.result && Signatures::ItemStackBase_destructor.result) {
+    if (jobs.empty()) {
+        iconReport = "no icons to draw this frame";
+    } else if (!iconBlock) {
+        iconReport = "the vault block isn't loaded on your side, so no item stack could be built";
+    } else if (!Signatures::ItemStackVtable.result || !Signatures::ItemStackBase_destructor.result) {
+        iconReport = "the item stack signatures did not resolve";
+    } else {
         alignas(SDK::ItemStack) char storage[sizeof(SDK::ItemStack)] = {};
-        if (auto* stack = SDK::ItemStack::constructBlockItem(storage, *iconBlock)) {
+        auto* stack = SDK::ItemStack::constructBlockItem(storage, *iconBlock);
+        if (!stack) iconReport = "could not build an item stack from the vault block (BlockType::asItemInstance)";
+        if (stack) {
+            int iconsDrawn = 0;
+            std::string missing;
             auto originalItem = stack->item;
             auto originalBlock = stack->block;
             auto originalAux = stack->aux;
@@ -645,14 +677,21 @@ void VaultPredictor::onRenderLayer(Event& evG) {
             mc.flush(false);
             for (auto const& job : jobs) {
                 void* counter = findItemCounter(job.item);
-                if (!counter) continue;
+                if (!counter) {
+                    if (missing.size() < 80) missing += (missing.empty() ? "" : ", ") + job.item;
+                    continue;
+                }
                 stack->item = reinterpret_cast<SDK::Item**>(counter);
                 stack->block = nullptr;
                 stack->aux = 0;
                 stack->itemCount = static_cast<uint8_t>(std::clamp(job.count, 1, 64));
-                // drawItem's size is a multiplier of 16 gui units: pixels * guiScale (= gui units per pixel) / 16.
-                mc.drawItem(stack, job.pos, job.size * mc.guiScale / 16.f, 1.f);
+                // Same convention as WAILA: the size is the icon width in the units of the position, divided by 48.
+                mc.drawItem(stack, job.pos, job.size / 48.f, 1.f);
+                ++iconsDrawn;
             }
+            iconReport = std::format("{} of {} icon(s) drawn{}{}; item registry: {}", iconsDrawn, jobs.size(),
+                                     missing.empty() ? "" : ", not found in the registry: ", missing,
+                                     registryNote.empty() ? std::string("not read yet") : registryNote);
 
             stack->item = originalItem;
             stack->block = originalBlock;

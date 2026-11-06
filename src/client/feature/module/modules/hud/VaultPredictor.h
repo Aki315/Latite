@@ -80,4 +80,6 @@ private:
     std::unordered_map<std::string, void*> itemCache;
     std::unordered_map<uint64_t, std::chrono::steady_clock::time_point> lastDiag; // Debug Mode, render thread only.
     void* itemCacheRegistry = nullptr;
+    std::string registryNote;  // Why the item registry couldn't be read, or what it holds (Debug Mode). Render thread only.
+    std::string iconReport;    // What happened to the icons last frame (Debug Mode). Render thread only.
 };
