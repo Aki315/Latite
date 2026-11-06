@@ -9,8 +9,8 @@
 //   2. The vault's loot table (reward / reward_ominous) is rolled with that random the way the game rolls any loot table.
 // Enchanted books are fully predicted (the enchantment and its level). Enchanted gear (enchant_with_levels) is certain as an
 // item and the loot after it is right, but its enchantments aren't known (it takes one draw, found from a real vault).
-// set_damage (the shield) isn't decoded yet: there the prediction stops (complete = false) and whatever would come after
-// it is unknown.
+// set_damage (the shield) is ASSUMED to take one draw (a float range): nothing has confirmed that on a real shield yet,
+// so the loot after a shield is a best guess. Anything undecoded makes the prediction stop (complete = false).
 #include <cmath>
 #include <cstdint>
 #include <initializer_list>
@@ -95,7 +95,7 @@ namespace vault_loot {
             float nextFloat() { return static_cast<float>(static_cast<double>(raw()) * 2.328306436538696e-10); }
         };
 
-        enum class Fn { SetCount, SetPotion, Amplifier, EnchantBook, EnchantLevels, Undecoded };
+        enum class Fn { SetCount, SetPotion, Amplifier, EnchantBook, EnchantLevels, SetDamage, Undecoded };
         struct EnchSpec {
             const char* name;
             int min, max;
@@ -124,6 +124,7 @@ namespace vault_loot {
         inline Func amplifier(float a, float b) { return { Fn::Amplifier, a, b, "" }; }
         inline Func enchantBook(std::initializer_list<EnchSpec> l) { return { Fn::EnchantBook, 0, 0, "", l }; }
         inline Func enchantLevels() { return { Fn::EnchantLevels, 0, 0, "" }; }
+        inline Func setDamage() { return { Fn::SetDamage, 0, 0, "" }; }
         inline Func undecoded(const char* what) { return { Fn::Undecoded, 0, 0, what }; }
         inline Entry item(const char* n, int w, std::initializer_list<Func> f = {}) { return { n, w, false, f }; }
         inline Entry nested(const char* n, int w) { return { n, w, true, {} }; }
@@ -153,7 +154,7 @@ namespace vault_loot {
                 { 1, 1, -1.f,
                   {
                       item("minecraft:emerald", 3, { count(2, 4) }),
-                      item("minecraft:shield", 3, { undecoded("set_damage") }),
+                      item("minecraft:shield", 3, { setDamage() }),
                       item("minecraft:bow", 3, { enchantLevels() }),
                       item("minecraft:crossbow", 2, { enchantLevels() }),
                       item("minecraft:iron_axe", 2, { enchantLevels() }),
@@ -248,6 +249,11 @@ namespace vault_loot {
                     case Fn::SetCount: s.count = rangeValue(fn.min, fn.max); break;
                     case Fn::Amplifier: s.variant = std::to_string(rangeValue(fn.min, fn.max)); break;
                     case Fn::SetPotion: s.variant = fn.text; break;
+                    case Fn::SetDamage:
+                        // ASSUMED (not yet checked on a real shield): the damage is a float range, so one nextFloat draw.
+                        (void)rng.raw();
+                        s.details = true;
+                        break;
                     case Fn::EnchantLevels:
                         // Takes exactly ONE draw: found from one real vault (a normal vault's diamond axe), where the
                         // three items rolled after it only match after skipping one. Not yet confirmed on more vaults.

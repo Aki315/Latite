@@ -528,7 +528,10 @@ void VaultPredictor::onRenderLayer(Event& evG) {
                                               util::StrToWStr(vault_nbt::roman(s.enchantLevel)),
                                           d2d::Color::RGB(255, 170, 255), 0.8f });
                     }
-                    if (s.details && enchants) lines.push_back({ L"enchantments unknown", d2d::Color::RGB(170, 170, 170), 0.8f });
+                    if (s.details && enchants) {
+                        lines.push_back({ s.item == "minecraft:shield" ? L"damage unknown" : L"enchantments unknown",
+                                          d2d::Color::RGB(170, 170, 170), 0.8f });
+                    }
                 }
                 predictedShown = !cols.empty();
                 if (!result.complete) note = L"the rest can't be predicted yet (enchanted item)";
