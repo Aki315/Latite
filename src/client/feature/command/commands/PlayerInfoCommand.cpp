@@ -85,7 +85,7 @@ bool PlayerInfoCommand::execute(std::string const label, std::vector<std::string
             const std::string name = entry.name;
             const auto* bytes = reinterpret_cast<const uint8_t*>(&entry);
             std::string line = std::format("&a{}&r:", name);
-            for (size_t i = 0xA0; i < 0xA8; ++i) line += std::format(" {:02X}", bytes[i]);
+            for (size_t i = 0xC0; i < 0xC8; ++i) line += std::format(" {:02X}", bytes[i]);
             print(line);
         }
         return true;
@@ -101,11 +101,7 @@ bool PlayerInfoCommand::execute(std::string const label, std::vector<std::string
 
         std::string skin;
         if (auto const* id = entry.skin.getId()) skin = *id;
-        // The platform is only shown when it is a real value: on 1.26.60 the field has moved and 0x78 now reads 0. The host
-        // flag overlaps the skin there, so it isn't shown at all until its new position is found (".playerinfo dump").
-        const int32_t platform = entry.buildPlatform;
-        rows.push_back({ std::move(name), platform >= 1 && platform <= 14 ? platformName(platform) : std::string("?"), false,
-                         entry.uniqueId, std::move(skin) });
+        rows.push_back({ std::move(name), platformName(entry.buildPlatform), entry.isHost, entry.uniqueId, std::move(skin) });
     }
     if (rows.empty()) {
         message(L"No player matches that name.", true);
@@ -114,8 +110,8 @@ bool PlayerInfoCommand::execute(std::string const label, std::vector<std::string
     std::sort(rows.begin(), rows.end(), [](Row const& l, Row const& r) { return util::ToLower(l.name) < util::ToLower(r.name); });
 
     for (auto const& row : rows) {
-        print(std::format("&aName: {}&r, &dPlatform: {}&r, &9Is Host: ?&r, &eActor Unique ID: {}&r, &bSkin Id: {}", row.name,
-                          row.platform, row.uniqueId, row.skinId));
+        print(std::format("&aName: {}&r, &dPlatform: {}&r, &9Is Host: {}&r, &eActor Unique ID: {}&r, &bSkin Id: {}", row.name,
+                          row.platform, row.host ? "Yes" : "No", row.uniqueId, row.skinId));
     }
     return true;
 }
