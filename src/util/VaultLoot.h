@@ -8,7 +8,8 @@
 //      (MT19937, the game's loot random).
 //   2. The vault's loot table (reward / reward_ominous) is rolled with that random the way the game rolls any loot table.
 // Enchanted books are fully predicted (the enchantment and its level). Enchanted gear (enchant_with_levels) is certain as an
-// item and the loot after it is right, but its enchantments aren't known (it takes one draw, found from a real vault).
+// item and the loot after it is right, but its enchantments CAN'T be predicted: the game draws the level from the vault's
+// random (one draw), then enchants the item with a separate thread-local random that isn't tied to the vault.
 // set_damage (the shield) is ASSUMED to take one draw (a float range): nothing has confirmed that on a real shield yet,
 // so the loot after a shield is a best guess. Anything undecoded makes the prediction stop (complete = false).
 #include <cmath>
@@ -255,8 +256,9 @@ namespace vault_loot {
                         s.details = true;
                         break;
                     case Fn::EnchantLevels:
-                        // Takes exactly ONE draw: found from one real vault (a normal vault's diamond axe), where the
-                        // three items rolled after it only match after skipping one. Not yet confirmed on more vaults.
+                        // One draw from the vault's random: the level, min + nextInt(max - min + 1) (confirmed by the game's code
+                        // and by a real vault: the items after a diamond axe only matched after skipping one draw). The
+                        // enchantments are then picked with a separate global random, so they can't be known.
                         (void)rng.raw();
                         s.details = true;
                         break;

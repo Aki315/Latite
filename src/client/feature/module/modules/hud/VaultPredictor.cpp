@@ -529,7 +529,7 @@ void VaultPredictor::onRenderLayer(Event& evG) {
                                           d2d::Color::RGB(255, 170, 255), 0.8f });
                     }
                     if (s.details && enchants) {
-                        lines.push_back({ s.item == "minecraft:shield" ? L"damage unknown" : L"enchantments unknown",
+                        lines.push_back({ s.item == "minecraft:shield" ? L"damage unknown" : L"random enchantments",
                                           d2d::Color::RGB(170, 170, 170), 0.8f });
                     }
                 }
