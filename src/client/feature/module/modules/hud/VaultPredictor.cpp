@@ -523,6 +523,11 @@ void VaultPredictor::onRenderLayer(Event& evG) {
                                               0.8f });
                         }
                     }
+                    if (!s.enchant.empty() && enchants) {
+                        lines.push_back({ util::StrToWStr(vault_nbt::prettyName(s.enchant)) + L" " +
+                                              util::StrToWStr(vault_nbt::roman(s.enchantLevel)),
+                                          d2d::Color::RGB(255, 170, 255), 0.8f });
+                    }
                     if (s.details && enchants) lines.push_back({ L"enchantments unknown", d2d::Color::RGB(170, 170, 170), 0.8f });
                 }
                 predictedShown = !cols.empty();
