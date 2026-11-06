@@ -44,7 +44,7 @@ namespace {
     constexpr size_t kSeedOffset = 0x30;
     constexpr size_t kPosOffset = 0x30;
     constexpr size_t kTagOffset = 0x40;
-    constexpr size_t kMaxVaults = 128;
+    constexpr size_t kMaxVaults = 512;
 
     template<typename T>
     bool readRaw(const void* base, size_t offset, T& out) {
@@ -169,6 +169,8 @@ VaultPredictor::VaultPredictor()
                      FloatValue(60.f), FloatValue(1.f));
     addSetting("showBackground", LocalizeString::get("client.textmodule.vaultPredictor.showBackground.name"),
                LocalizeString::get("client.textmodule.vaultPredictor.showBackground.desc"), showBackground);
+    addSetting("scanBlocks", LocalizeString::get("client.textmodule.vaultPredictor.scanBlocks.name"),
+               LocalizeString::get("client.textmodule.vaultPredictor.scanBlocks.desc"), scanBlocks);
     addSetting("debugMode", LocalizeString::get("client.textmodule.vaultPredictor.debugMode.name"),
                LocalizeString::get("client.textmodule.vaultPredictor.debugMode.desc"), debugMode);
 
@@ -191,6 +193,12 @@ void VaultPredictor::reset() {
     ignoredIds.clear();
     itemCache.clear();
     itemCacheRegistry = nullptr;
+    registryOffset = 0;
+    scanIndex = 0;
+    scanSweeps = 0;
+    scanVaultsFound = 0;
+    vaultLegacy = nullptr;
+    otherLegacy.clear();
 }
 
 void VaultPredictor::onPacketReceive(Event& evG) {
@@ -261,6 +269,7 @@ void VaultPredictor::handleBlockActorData(SDK::Packet* pkt) {
     if (vaults.size() > kMaxVaults) vaults.clear();
     auto& entry = vaults[keyOf(x, y, z)];
     entry.pos = BlockPos { x, y, z };
+    entry.fromScan = false;
     if (data.hasDisplay) {
         if (normalOnlyItem(data.display.name)) entry.sawNormalOnly = true;
         if (ominousOnlyItem(data.display.name)) entry.sawOminousOnly = true;
@@ -304,6 +313,42 @@ bool VaultPredictor::localPlayerId(int64_t& out) const {
     return false;
 }
 
+namespace {
+    // Does this look like the item registry? A list of item counters at +0x38 (begin) and +0x40 (end), each pointing at an
+    // Item whose id (a HashedString at +0x120) reads "minecraft:...". Every read is guarded.
+    bool plausibleRegistry(const void* reg) {
+        uintptr_t begin = 0, end = 0;
+        if (!reg || !readRaw(reg, 0x38, begin) || !readRaw(reg, 0x40, end)) return false;
+        if (!begin || end <= begin || (end - begin) % 8 != 0) return false;
+        const size_t count = (end - begin) / 8;
+        if (count < 100 || count > 100000) return false;
+
+        int good = 0, tried = 0;
+        for (size_t i = 0; i < count && tried < 12; ++i) {
+            uintptr_t counter = 0, item = 0;
+            if (!readRaw(reinterpret_cast<const void*>(begin), i * 8, counter)) return false;
+            if (!counter || !readRaw(reinterpret_cast<const void*>(counter), 0, item) || !item) continue;
+            ++tried;
+            const uintptr_t str = item + 0x120 + 8; // the std::string inside the HashedString
+            uint64_t size = 0, cap = 0;
+            if (!readRaw(reinterpret_cast<const void*>(str), 16, size) || !readRaw(reinterpret_cast<const void*>(str), 24, cap))
+                continue;
+            if (size < 11 || size > 80 || cap < size || cap > 0x1000) continue;
+            const char* chars = reinterpret_cast<const char*>(str);
+            if (cap >= 16) {
+                uintptr_t ptr = 0;
+                if (!readRaw(reinterpret_cast<const void*>(str), 0, ptr) || !ptr) continue;
+                chars = reinterpret_cast<const char*>(ptr);
+            }
+            struct Prefix {
+                char c[10];
+            } prefix {};
+            if (readRaw(chars, 0, prefix) && std::memcmp(prefix.c, "minecraft:", 10) == 0) ++good;
+        }
+        return tried >= 4 && good * 2 >= tried;
+    }
+} // namespace
+
 void* VaultPredictor::findItemCounter(std::string const& id) {
     auto* client = SDK::ClientInstance::get();
     auto* level = client && client->minecraft ? client->minecraft->getLevel() : nullptr;
@@ -313,10 +358,32 @@ void* VaultPredictor::findItemCounter(std::string const& id) {
     }
 
     // The item registry, the same one WAILA reads its tool icons from: a list of item counters, each pointing at an Item.
-    void* registry = *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(level) + 0x198);
-    if (!registry) {
-        registryNote = "the item registry pointer (Level + 0x198) is null";
-        return nullptr;
+    // It is looked for at the known offset (Level + 0x198) and, if that doesn't hold up (the Level layout changes between
+    // game versions), anywhere in the first 2 KB of the Level; the offset that works is remembered.
+    void* registry = nullptr;
+    uintptr_t cached = 0;
+    if (registryOffset && readRaw(level, registryOffset, cached) && cached && reinterpret_cast<void*>(cached) == itemCacheRegistry &&
+        !itemCache.empty()) {
+        registry = reinterpret_cast<void*>(cached);
+    } else {
+        const auto now = std::chrono::steady_clock::now();
+        if (lastRegistryTry.time_since_epoch().count() != 0 && now - lastRegistryTry < std::chrono::seconds(2)) return nullptr;
+        lastRegistryTry = now;
+        registryOffset = 0;
+        auto tryOffset = [&](size_t off) {
+            uintptr_t p = 0;
+            if (!readRaw(level, off, p) || !p || !plausibleRegistry(reinterpret_cast<void*>(p))) return false;
+            registry = reinterpret_cast<void*>(p);
+            registryOffset = off;
+            return true;
+        };
+        if (!tryOffset(0x198)) {
+            for (size_t off = 0x40; off <= 0x800 && !registry; off += 8) tryOffset(off);
+        }
+        if (!registry) {
+            registryNote = "no item registry found in the Level (the known offset 0x198 and a scan of the first 2 KB both failed)";
+            return nullptr;
+        }
     }
 
     if (registry != itemCacheRegistry || itemCache.empty()) {
@@ -342,13 +409,73 @@ void* VaultPredictor::findItemCounter(std::string const& id) {
             if (name.rfind("minecraft:", 0) == 0) itemCache.emplace(name.substr(10), counter);
             if (examples.size() < 60) examples += (examples.empty() ? "" : ", ") + name;
         }
-        registryNote = std::format("{} slot(s), {} with an item, {} names read (e.g. {})", slots, withItem, itemCache.size(),
-                                   examples.empty() ? std::string("none") : examples);
+        registryNote = std::format("found at Level + 0x{:X}: {} slot(s), {} with an item, {} names read (e.g. {})", registryOffset,
+                                   slots, withItem, itemCache.size(), examples.empty() ? std::string("none") : examples);
     }
 
     auto it = itemCache.find(id.find(':') == std::string::npos ? "minecraft:" + id : id);
     if (it == itemCache.end()) it = itemCache.find(id);
     return it == itemCache.end() ? nullptr : it->second;
+}
+
+// Looks for vault blocks around you, a few thousand positions per frame in a rolling sweep over the box that Max Distance
+// describes, so a vault shows its loot before the server has sent anything about it. Only the block's type is compared:
+// the name of each distinct type is read once.
+void VaultPredictor::scanForVaults(SDK::BlockSource* region, Vec3 const& me, float maxDist) {
+    const int R = static_cast<int>(std::ceil(maxDist));
+    const int cx = static_cast<int>(std::floor(me.x));
+    const int cy = static_cast<int>(std::floor(me.y));
+    const int cz = static_cast<int>(std::floor(me.z));
+    const int y0 = std::max(-64, cy - R);
+    const int y1 = std::min(320, cy + R);
+    const int nxz = 2 * R + 1;
+    const int ny = y1 - y0 + 1;
+    if (ny <= 0) return;
+    const size_t total = static_cast<size_t>(nxz) * static_cast<size_t>(nxz) * static_cast<size_t>(ny);
+    if (scanIndex >= total) {
+        scanIndex = 0;
+        ++scanSweeps;
+    }
+
+    constexpr int kBudget = 12000;
+    const auto now = std::chrono::steady_clock::now();
+    for (int n = 0; n < kBudget && scanIndex < total; ++n, ++scanIndex) {
+        size_t i = scanIndex;
+        const int dy = static_cast<int>(i % static_cast<size_t>(ny));
+        i /= static_cast<size_t>(ny);
+        const int dz = static_cast<int>(i % static_cast<size_t>(nxz));
+        const int dx = static_cast<int>(i / static_cast<size_t>(nxz));
+        const BlockPos pos { cx - R + dx, y0 + dy, cz - R + dz };
+
+        SDK::Block* block = region->getBlock(pos);
+        if (!block) continue;
+        SDK::BlockLegacy* legacy = block->legacyBlock;
+        if (!legacy) continue;
+        if (legacy != vaultLegacy) {
+            if (otherLegacy.contains(legacy)) continue;
+            if (legacy->namespacedId.getString() != "minecraft:vault") {
+                otherLegacy.insert(legacy);
+                continue;
+            }
+            vaultLegacy = legacy;
+        }
+
+        std::lock_guard lock(mutex);
+        const uint64_t key = keyOf(pos.x, pos.y, pos.z);
+        auto it = vaults.find(key);
+        if (it != vaults.end()) {
+            it->second.seen = now;
+        } else if (vaults.size() < kMaxVaults) {
+            Entry e;
+            e.pos = pos;
+            e.fromScan = true;
+            e.seen = now;
+            vaults.emplace(key, std::move(e));
+            ++scanVaultsFound;
+        }
+    }
+    scanReport = std::format("{} new vault(s) found so far; position {} of {} in the current sweep ({} full sweep(s) done); {} other block type(s) checked",
+                             scanVaultsFound, scanIndex, total, scanSweeps, otherLegacy.size());
 }
 
 namespace {
@@ -390,6 +517,7 @@ void VaultPredictor::onRenderLayer(Event& evG) {
     std::vector<Pick> picks;
     const float maxDist = std::clamp(static_cast<float>(std::get<FloatValue>(maxDistance)), 2.f, 128.f);
     const Vec3 me = player->getPos();
+    if (std::get<BoolValue>(scanBlocks)) scanForVaults(region, me, maxDist);
     {
         std::lock_guard lock(mutex);
         for (auto const& [k, entry] : vaults) {
@@ -436,8 +564,10 @@ void VaultPredictor::onRenderLayer(Event& evG) {
     SDK::Block* iconBlock = nullptr;
     int drawn = 0;
 
+    const bool canPredict = haveCalcSeed && havePlayer;
+
     for (auto const& pick : picks) {
-        if (drawn >= 6) break;
+        if (drawn >= 8) break;
 
         // It must still be a vault; an empty name means the chunk isn't loaded on your side, which is fine.
         const std::string blockName = blockNameInner(pick.entry.pos);
@@ -475,141 +605,172 @@ void VaultPredictor::onRenderLayer(Event& evG) {
         const float S = baseIcon * scale;
         const float gap = 6.f * scale;
         const float pad = 5.f * scale;
+        const std::wstring distText = std::to_wstring(static_cast<int>(std::lround(pick.dist))) + L"m";
 
-        // The columns: only rewards the server really sent. The item spinning in the vault (display_item) is not a reward
-        // and is never drawn.
-        std::vector<Column> cols;
-        auto addColumn = [&](vault_nbt::ItemInfo const& item) {
-            Column col;
-            col.item = item;
-            if (names) col.lines.push_back({ util::StrToWStr(vault_nbt::prettyName(item.name)), d2d::Colors::WHITE, 0.85f });
-            if (enchants) {
-                for (auto const& e : item.enchants) {
-                    col.lines.push_back({ util::StrToWStr(vault_nbt::enchantName(e.id)) + L" " +
-                                              util::StrToWStr(vault_nbt::roman(e.level)),
-                                          d2d::Color::RGB(255, 100, 255), 0.85f });
-                }
-            }
-            cols.push_back(std::move(col));
+        const bool serverRewards = !data.toEject.empty();
+
+        // The boxes to draw, bottom first. One when the type is known (or the server sent the rewards). When the type isn't
+        // known yet (the server doesn't send it, and no item only one type has was seen spinning in the vault), one box per
+        // type, so the loot of a vault you haven't been near can still be read once you can tell which kind it is.
+        struct Box {
+            bool ominous;
+            bool known;
         };
-        for (auto const& item : data.toEject) addColumn(item);
+        std::vector<Box> boxes;
+        if (typeKnown || serverRewards) boxes.push_back({ ominous, typeKnown });
+        else if (canPredict) boxes = { { false, false }, { true, false } };
+        else boxes.push_back({ false, false }); // only the note
 
-        // No rewards from the server: work them out. The loot depends on the vault type, so an unknown type can't be done.
-        std::wstring note;
+        bool firstBox = true;
         bool predictedShown = false;
-        if (cols.empty()) {
-            if (!typeKnown) {
-                note = L"vault type unknown: wait for the vault item to change, or set Vault Type";
-            } else if (!haveCalcSeed) {
-                note = L"no valid world seed (see the World Seed setting)";
-            } else if (!havePlayer) {
-                note = L"player id unknown (see the Player ID setting)";
-            } else {
-                const auto result = vault_loot::predict(calcSeed, calcPlayer, pick.entry.pos.x, pick.entry.pos.y,
-                                                        pick.entry.pos.z, ominous);
-                for (auto const& s : result.items) {
-                    vault_nbt::ItemInfo info;
-                    info.name = s.item;
-                    info.count = s.count;
-                    addColumn(info);
-                    auto& lines = cols.back().lines;
-                    if (names && !s.variant.empty()) {
-                        if (s.item == "minecraft:ominous_bottle") {
-                            // The amplifier counts from 0; the bottle's name shows the Bad Omen level.
-                            lines.push_back({ L"Bad Omen " + util::StrToWStr(vault_nbt::roman(std::atoi(s.variant.c_str()) + 1)),
-                                              d2d::Color::RGB(170, 170, 255), 0.8f });
-                        } else {
-                            lines.push_back({ util::StrToWStr(vault_nbt::prettyName(s.variant)), d2d::Color::RGB(170, 170, 255),
-                                              0.8f });
+        size_t firstCols = 0;
+
+        auto drawBox = [&](Box const& box, float bottom) -> float {
+            // The columns: the rewards the server sent, else the calculated ones. The item spinning in the vault
+            // (display_item) is not a reward and is never drawn.
+            std::vector<Column> cols;
+            auto addColumn = [&](vault_nbt::ItemInfo const& item) {
+                Column col;
+                col.item = item;
+                if (names) col.lines.push_back({ util::StrToWStr(vault_nbt::prettyName(item.name)), d2d::Colors::WHITE, 0.85f });
+                if (enchants) {
+                    for (auto const& e : item.enchants) {
+                        col.lines.push_back({ util::StrToWStr(vault_nbt::enchantName(e.id)) + L" " +
+                                                  util::StrToWStr(vault_nbt::roman(e.level)),
+                                              d2d::Color::RGB(255, 100, 255), 0.85f });
+                    }
+                }
+                cols.push_back(std::move(col));
+            };
+            for (auto const& item : data.toEject) addColumn(item);
+
+            std::wstring note;
+            bool predicted = false;
+            if (cols.empty()) {
+                if (!typeKnown && !canPredict) {
+                    if (!haveCalcSeed) note = L"no valid world seed (see the World Seed setting)";
+                    else note = L"player id unknown (see the Player ID setting)";
+                } else if (!haveCalcSeed) {
+                    note = L"no valid world seed (see the World Seed setting)";
+                } else if (!havePlayer) {
+                    note = L"player id unknown (see the Player ID setting)";
+                } else {
+                    const auto result = vault_loot::predict(calcSeed, calcPlayer, pick.entry.pos.x, pick.entry.pos.y,
+                                                            pick.entry.pos.z, box.ominous);
+                    for (auto const& s : result.items) {
+                        vault_nbt::ItemInfo info;
+                        info.name = s.item;
+                        info.count = s.count;
+                        addColumn(info);
+                        auto& lines = cols.back().lines;
+                        if (names && !s.variant.empty()) {
+                            if (s.item == "minecraft:ominous_bottle") {
+                                // The amplifier counts from 0; the bottle's name shows the Bad Omen level.
+                                lines.push_back({ L"Bad Omen " + util::StrToWStr(vault_nbt::roman(std::atoi(s.variant.c_str()) + 1)),
+                                                  d2d::Color::RGB(170, 170, 255), 0.8f });
+                            } else {
+                                lines.push_back({ util::StrToWStr(vault_nbt::prettyName(s.variant)),
+                                                  d2d::Color::RGB(170, 170, 255), 0.8f });
+                            }
+                        }
+                        if (!s.enchant.empty() && enchants) {
+                            lines.push_back({ util::StrToWStr(vault_nbt::prettyName(s.enchant)) + L" " +
+                                                  util::StrToWStr(vault_nbt::roman(s.enchantLevel)),
+                                              d2d::Color::RGB(255, 170, 255), 0.8f });
+                        }
+                        if (s.details && enchants) {
+                            lines.push_back({ s.item == "minecraft:shield" ? L"damage unknown" : L"random enchantments",
+                                              d2d::Color::RGB(170, 170, 170), 0.8f });
                         }
                     }
-                    if (!s.enchant.empty() && enchants) {
-                        lines.push_back({ util::StrToWStr(vault_nbt::prettyName(s.enchant)) + L" " +
-                                              util::StrToWStr(vault_nbt::roman(s.enchantLevel)),
-                                          d2d::Color::RGB(255, 170, 255), 0.8f });
-                    }
-                    if (s.details && enchants) {
-                        lines.push_back({ s.item == "minecraft:shield" ? L"damage unknown" : L"random enchantments",
-                                          d2d::Color::RGB(170, 170, 170), 0.8f });
-                    }
+                    predicted = !cols.empty();
+                    if (!result.complete) note = L"the rest can't be predicted yet";
+                    else if (cols.empty()) note = L"nothing ejected";
                 }
-                predictedShown = !cols.empty();
-                if (!result.complete) note = L"the rest can't be predicted yet (enchanted item)";
-                else if (cols.empty()) note = L"nothing ejected";
             }
-        }
+            if (firstBox) {
+                predictedShown = predicted;
+                firstCols = cols.size();
+                firstBox = false;
+            }
 
-        // The title under the icons: the type and the distance.
-        const std::wstring title = std::wstring(ominous ? L"Ominous Vault" : L"Vault") + L" " +
-                                   std::to_wstring(static_cast<int>(std::lround(pick.dist))) + L"m" +
-                                   (predictedShown ? L" (predicted)" : L"");
-        const d2d::Color titleColor = ominous ? d2d::Color::RGB(120, 200, 255) : d2d::Color::RGB(255, 170, 0);
+            // The title under the icons: the type and the distance.
+            std::wstring title;
+            if (box.known) title = std::wstring(box.ominous ? L"Ominous Vault " : L"Vault ") + distText;
+            else if (boxes.size() > 1) title = std::wstring(box.ominous ? L"If ominous: " : L"If normal: ") + distText;
+            else title = L"Vault " + distText;
+            if (predicted) title += L" (predicted)";
+            const d2d::Color titleColor = box.ominous ? d2d::Color::RGB(120, 200, 255) : d2d::Color::RGB(255, 170, 0);
 
-        const float lineH = std::max(mc.getTextSize(L"Ag", font, ts, false).y, 6.f);
-        const Vec2 titleBox = mc.getTextSize(title, font, ts, false);
-        const Vec2 noteBox = note.empty() ? Vec2 { 0.f, 0.f } : mc.getTextSize(note, font, ts * 0.8f, false);
+            const float lineH = std::max(mc.getTextSize(L"Ag", font, ts, false).y, 6.f);
+            const Vec2 titleBox = mc.getTextSize(title, font, ts, false);
+            const Vec2 noteBox = note.empty() ? Vec2 { 0.f, 0.f } : mc.getTextSize(note, font, ts * 0.8f, false);
 
-        // Column widths and the tallest text block.
-        std::vector<float> colW;
-        float rowW = 0.f;
-        size_t maxLines = 0;
-        for (auto const& col : cols) {
-            float w = icons ? S : 0.f;
-            for (auto const& line : col.lines) w = std::max(w, mc.getTextSize(line.text, font, ts * line.scale, false).x);
-            colW.push_back(w + gap);
-            rowW += colW.back();
-            maxLines = std::max(maxLines, col.lines.size());
-        }
-        const float contentW = std::max({ rowW, titleBox.x, noteBox.x });
-        const float iconH = (icons && !cols.empty()) ? S + gap * 0.5f : 0.f;
-        const float textH = static_cast<float>(maxLines) * lineH * 0.85f;
-        const float noteH = note.empty() ? 0.f : lineH * 0.8f;
-        const float totalH = iconH + textH + noteH + lineH + pad * 2.f;
+            // Column widths and the tallest text block.
+            std::vector<float> colW;
+            float rowW = 0.f;
+            size_t maxLines = 0;
+            for (auto const& col : cols) {
+                float w = icons ? S : 0.f;
+                for (auto const& line : col.lines) w = std::max(w, mc.getTextSize(line.text, font, ts * line.scale, false).x);
+                colW.push_back(w + gap);
+                rowW += colW.back();
+                maxLines = std::max(maxLines, col.lines.size());
+            }
+            const float contentW = std::max({ rowW, titleBox.x, noteBox.x });
+            const float iconH = (icons && !cols.empty()) ? S + gap * 0.5f : 0.f;
+            const float textH = static_cast<float>(maxLines) * lineH * 0.85f;
+            const float noteH = note.empty() ? 0.f : lineH * 0.8f;
+            const float totalH = iconH + textH + noteH + lineH + pad * 2.f;
 
-        const float left = screen->x - contentW * 0.5f;
-        const float bottom = screen->y;
-        const float top = bottom - totalH;
-        if (background) {
-            mc.fillRoundedRectangle(d2d::Rect(left - pad, top, left + contentW + pad, bottom), d2d::Color(0.f, 0.f, 0.f, 0.4f),
-                                    ts * 0.3f);
-        }
+            const float left = screen->x - contentW * 0.5f;
+            const float top = bottom - totalH;
+            if (background) {
+                mc.fillRoundedRectangle(d2d::Rect(left - pad, top, left + contentW + pad, bottom),
+                                        d2d::Color(0.f, 0.f, 0.f, 0.4f), ts * 0.3f);
+            }
 
-        // Columns, centred as a row.
-        float x = screen->x - rowW * 0.5f;
-        for (size_t i = 0; i < cols.size(); ++i) {
-            const float colCenter = x + (colW[i] - gap) * 0.5f;
-            float y = top + pad;
-            if (icons) {
-                jobs.push_back({ cols[i].item.name, cols[i].item.count, { colCenter - S * 0.5f, y }, S });
-                if (amounts && cols[i].item.count > 1) {
-                    const std::wstring n = std::to_wstring(cols[i].item.count);
-                    const Vec2 nb = mc.getTextSize(n, font, ts * 0.8f, false);
-                    mc.drawText(d2d::Rect(colCenter + S * 0.5f - nb.x, y + S - nb.y, colCenter + S * 0.5f + 2.f, y + S + 2.f), n,
-                                d2d::Colors::WHITE, font, ts * 0.8f, DWRITE_TEXT_ALIGNMENT_TRAILING,
+            // Columns, centred as a row.
+            float x = screen->x - rowW * 0.5f;
+            for (size_t i = 0; i < cols.size(); ++i) {
+                const float colCenter = x + (colW[i] - gap) * 0.5f;
+                float y = top + pad;
+                if (icons) {
+                    jobs.push_back({ cols[i].item.name, cols[i].item.count, { colCenter - S * 0.5f, y }, S });
+                    if (amounts && cols[i].item.count > 1) {
+                        const std::wstring n = std::to_wstring(cols[i].item.count);
+                        const Vec2 nb = mc.getTextSize(n, font, ts * 0.8f, false);
+                        mc.drawText(d2d::Rect(colCenter + S * 0.5f - nb.x, y + S - nb.y, colCenter + S * 0.5f + 2.f, y + S + 2.f),
+                                    n, d2d::Colors::WHITE, font, ts * 0.8f, DWRITE_TEXT_ALIGNMENT_TRAILING,
+                                    DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                    }
+                    y += S + gap * 0.5f;
+                } else if (amounts && cols[i].item.count > 1 && !cols[i].lines.empty()) {
+                    cols[i].lines[0].text += L" x" + std::to_wstring(cols[i].item.count);
+                }
+                for (auto const& line : cols[i].lines) {
+                    mc.drawText(d2d::Rect(colCenter - colW[i] * 0.5f, y, colCenter + colW[i] * 0.5f, y + lineH * 0.85f),
+                                line.text, line.color, font, ts * line.scale, DWRITE_TEXT_ALIGNMENT_CENTER,
                                 DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                    y += lineH * 0.85f;
                 }
-                y += S + gap * 0.5f;
-            } else if (amounts && cols[i].item.count > 1 && !cols[i].lines.empty()) {
-                cols[i].lines[0].text += L" x" + std::to_wstring(cols[i].item.count);
+                x += colW[i];
             }
-            for (auto const& line : cols[i].lines) {
-                mc.drawText(d2d::Rect(colCenter - colW[i] * 0.5f, y, colCenter + colW[i] * 0.5f, y + lineH * 0.85f), line.text,
-                            line.color, font, ts * line.scale, DWRITE_TEXT_ALIGNMENT_CENTER,
-                            DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-                y += lineH * 0.85f;
-            }
-            x += colW[i];
-        }
 
-        // The note and the title at the bottom, next to the vault.
-        float ty = top + pad + iconH + textH;
-        if (!note.empty()) {
-            mc.drawText(d2d::Rect(left, ty, left + contentW, ty + noteH), note, d2d::Color::RGB(170, 170, 170), font, ts * 0.8f,
+            // The note and the title at the bottom, next to the vault.
+            float ty = top + pad + iconH + textH;
+            if (!note.empty()) {
+                mc.drawText(d2d::Rect(left, ty, left + contentW, ty + noteH), note, d2d::Color::RGB(170, 170, 170), font,
+                            ts * 0.8f, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                ty += noteH;
+            }
+            mc.drawText(d2d::Rect(left, ty, left + contentW, ty + lineH), title, titleColor, font, ts,
                         DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-            ty += noteH;
-        }
-        mc.drawText(d2d::Rect(left, ty, left + contentW, ty + lineH), title, titleColor, font, ts, DWRITE_TEXT_ALIGNMENT_CENTER,
-                    DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            return top;
+        };
+
+        float bottom = screen->y;
+        for (auto const& box : boxes) bottom = drawBox(box, bottom) - 4.f * scale;
 
         if (!iconBlock) iconBlock = region->getBlock(pick.entry.pos);
         ++drawn;
@@ -641,24 +802,26 @@ void VaultPredictor::onRenderLayer(Event& evG) {
                     "  World seed (StartGame packet): {}\n"
                     "  Manual seed: {}\n"
                     "  Seed comparison: {}\n"
-                    "  Vault detected: OK\n"
+                    "  Vault detected: OK ({})\n"
                     "  Position: {}, {}, {}\n"
                     "  Vault type: {}\n"
                     "  Player id: {}\n"
                     "  Server reward data (items_to_eject): {}\n"
                     "  Predicted items: {}\n"
                     "  Icons (last frame): {}\n"
+                    "  Block scan: {}\n"
                     "  HUD: {}",
                     haveSeed ? std::format("OK ({})", worldSeed) : std::string("NOT RECEIVED (join the world again with the mod loaded)"),
-                    manual, match, pick.entry.pos.x, pick.entry.pos.y, pick.entry.pos.z,
+                    manual, match, pick.entry.fromScan ? "found by the block scan" : "server update",
+                    pick.entry.pos.x, pick.entry.pos.y, pick.entry.pos.z,
                     typeKnown ? std::format("{} ({})", ominous ? "Ominous" : "Normal", typeSource)
-                              : std::string("UNKNOWN (no loot table sent; no item seen yet that only one type has)"),
+                              : std::string("not known yet: showing both kinds"),
                     havePlayer ? std::format("{}", calcPlayer) : std::string("UNKNOWN (set the Player ID setting)"),
                     data.hasEjectField ? std::to_string(data.toEject.size()) + " item(s) sent" : std::string("not sent"),
-                    predictedShown ? std::format("{} column(s) calculated (seed {} used)", cols.size(), calcSeed)
+                    predictedShown ? std::format("{} column(s) calculated (seed {} used)", firstCols, calcSeed)
                                    : std::string("none"),
-                    iconReport.empty() ? std::string("not drawn yet") : iconReport,
-                    cols.empty() ? "title and note only (no rewards to draw)" : "rewards drawn");
+                    iconReport.empty() ? std::string("not drawn yet") : iconReport, scanReport,
+                    firstCols == 0 ? "title and note only (no rewards to draw)" : "rewards drawn");
             }
         }
     }

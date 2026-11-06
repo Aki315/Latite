@@ -13,18 +13,23 @@
 
 namespace SDK {
     class Block;
+    class BlockLegacy;
+    class BlockSource;
     class Packet;
 }
 
 // Draws the rewards of the trial vaults near you as item icons floating above each vault, in the world (not in a HUD box).
 //
 // What it can and can't do:
-//   * It shows every vault the server has sent data about that is within Max Distance (up to a few, nearest first).
+//   * It shows every vault within Max Distance (up to a few, nearest first): the ones the server has sent data about, and
+//     the ones found by scanning the blocks around you (Scan for Vaults), so you don't have to go near them first. When
+//     the type of a vault isn't known yet, both kinds are shown.
 //   * Bedrock decides a vault's rewards from the level seed, the vault's position and the player (1.21.20 changelog:
 //     "Loot ejected from Vaults in Trial Chambers are now dependent on level, position and player seed"). util/VaultLoot.h
 //     works that out from the world seed, your unique actor id and the position, the way the game does. Rewards the server
 //     sends in the vault data (items_to_eject) are shown as they are and take priority.
-//   * Enchanted items can't be predicted yet (their code isn't decoded): the prediction stops at the first one.
+//   * Enchanted books are predicted with their enchantment. The enchantments on gear come from a separate random that has
+//     nothing to do with the vault, so they can't be known ("random enchantments").
 //   * The item shown inside the vault (display_item) is not a reward and is only shown, labelled, when no rewards are known.
 //   * Debug Mode writes the raw vault data to the log (latest.log), which is how to see what the server sends.
 class VaultPredictor final : public Module {
@@ -50,11 +55,13 @@ private:
         // one of the two tables can give tells which vault this is. Kept across updates.
         bool sawNormalOnly = false;
         bool sawOminousOnly = false;
+        bool fromScan = false; // found by looking for vault blocks around you, not yet by a server update
     };
 
     void reset();
     void handleBlockActorData(SDK::Packet* pkt);
     void* findItemCounter(std::string const& id);
+    void scanForVaults(SDK::BlockSource* region, Vec3 const& me, float maxDist);
     bool localPlayerId(int64_t& out) const; // The typed Player ID, else the one in the player list.
 
     EnumData vaultType;
@@ -67,6 +74,7 @@ private:
     ValueType iconSize = FloatValue(40.f);     // Width and height of an item icon, in pixels at close range.
     ValueType textSize = FloatValue(20.f);
     ValueType showBackground = BoolValue(true);
+    ValueType scanBlocks = BoolValue(true);    // Look for vault blocks within Max Distance, so vaults show before you are near.
     ValueType maxDistance = FloatValue(16.f);  // Vaults further away than this (in blocks) are not shown.
     ValueType debugMode = BoolValue(false);
 
@@ -80,6 +88,16 @@ private:
     std::unordered_map<std::string, void*> itemCache;
     std::unordered_map<uint64_t, std::chrono::steady_clock::time_point> lastDiag; // Debug Mode, render thread only.
     void* itemCacheRegistry = nullptr;
+    size_t registryOffset = 0; // Where in the Level the item registry pointer was found (0 = not yet).
+    std::chrono::steady_clock::time_point lastRegistryTry {};
+
+    // The block scan (render thread only): a rolling sweep over the box around you, a few thousand blocks per frame.
+    size_t scanIndex = 0;
+    size_t scanSweeps = 0;
+    size_t scanVaultsFound = 0;
+    SDK::BlockLegacy* vaultLegacy = nullptr;
+    std::unordered_set<void*> otherLegacy; // block types already checked and not a vault
+    std::string scanReport = "not run yet";
     std::string registryNote;  // Why the item registry couldn't be read, or what it holds (Debug Mode). Render thread only.
     std::string iconReport;    // What happened to the icons last frame (Debug Mode). Render thread only.
 };

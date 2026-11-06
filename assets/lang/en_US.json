@@ -643,6 +643,8 @@
         "client.textmodule.vaultPredictor.type.ominous.desc": "Only ominous vaults (loot_tables/chests/trial_chambers/reward_ominous).",
         "client.textmodule.vaultPredictor.seed.name": "World Seed",
         "client.textmodule.vaultPredictor.seed.desc": "Your world seed, as a whole number (signed 64-bit). Leave empty to use the one the server sent when you joined. The vault loot is calculated from it, so a wrong seed (some servers send a fake one) gives wrong loot.",
+        "client.textmodule.vaultPredictor.scanBlocks.name": "Scan for Vaults",
+        "client.textmodule.vaultPredictor.scanBlocks.desc": "Looks for vault blocks within Max Distance, a few thousand blocks per frame, so a vault shows its loot without you having to go near it first. Turn it off if you notice it costing frames.",
         "client.textmodule.vaultPredictor.playerId.name": "Player ID",
         "client.textmodule.vaultPredictor.playerId.desc": "Your unique actor id (a whole number, shown by the .playerinfo command). Leave empty to read it from the player list. It is part of the loot calculation: another id gives other loot (in singleplayer it is usually -4294967295).",
         "client.textmodule.vaultPredictor.showNames.name": "Show Item Names",
