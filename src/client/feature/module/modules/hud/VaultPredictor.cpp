@@ -405,15 +405,6 @@ namespace {
         return 0;
     }
 
-    // What a list that looked like the item registry but wasn't held (for the Debug Mode report).
-    struct Rejected {
-        bool set = false;
-        size_t vecOff = 0;
-        size_t count = 0;
-        size_t named = 0;
-        char first[64] = {};
-    };
-
     // Does the array of `n` 8-byte values at `a` hold `v`? Guarded.
     bool holdsValue(const uintptr_t* a, size_t n, uintptr_t v) {
         __try {
