@@ -102,6 +102,7 @@ private:
     ValueType textSize = FloatValue(20.f);
     ValueType showBackground = BoolValue(true);
     ValueType scanBlocks = BoolValue(true);    // Look for vault blocks within Max Distance, so vaults show before you are near.
+    ValueType zoomScaling = FloatValue(70.f); // How much the boxes grow when the Zoom module magnifies the view (percent).
     ValueType maxDistance = FloatValue(16.f);  // Vaults further away than this (in blocks) are not shown.
     ValueType debugMode = BoolValue(false);
 

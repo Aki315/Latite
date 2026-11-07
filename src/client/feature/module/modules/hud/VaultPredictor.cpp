@@ -10,6 +10,7 @@
 #include "mc/common/client/gui/controls/VisualTree.h"
 #include "util/DrawContext.h"
 #include "util/WorldToScreen.h"
+#include "util/ZoomState.h"
 #include "mc/common/client/game/ClientInstance.h"
 #include "mc/common/nbt/Tag.h"
 #include "mc/Addresses.h"
@@ -190,7 +191,10 @@ VaultPredictor::VaultPredictor()
                LocalizeString::get("client.textmodule.vaultPredictor.showEnchantments.desc"), showEnchantments);
     addSliderSetting("maxDistance", LocalizeString::get("client.textmodule.vaultPredictor.maxDistance.name"),
                      LocalizeString::get("client.textmodule.vaultPredictor.maxDistance.desc"), maxDistance,
-                     FloatValue(2.f), FloatValue(128.f), FloatValue(1.f));
+                     FloatValue(2.f), FloatValue(256.f), FloatValue(1.f));
+    addSliderSetting("zoomScaling", LocalizeString::get("client.textmodule.vaultPredictor.zoomScaling.name"),
+                     LocalizeString::get("client.textmodule.vaultPredictor.zoomScaling.desc"), zoomScaling, FloatValue(0.f),
+                     FloatValue(100.f), FloatValue(5.f));
     addSetting("showIcons", LocalizeString::get("client.textmodule.vaultPredictor.showIcons.name"),
                LocalizeString::get("client.textmodule.vaultPredictor.showIcons.desc"), showIcons);
     blockIcons.addEntry(EnumEntry(BlockIconsGame, LocalizeString::get("client.textmodule.vaultPredictor.blockIcons.game.name")));
@@ -880,8 +884,10 @@ void VaultPredictor::scanForVaults(SDK::BlockSource* region, Vec3 const& me, flo
     const int cx = static_cast<int>(std::floor(me.x));
     const int cy = static_cast<int>(std::floor(me.y));
     const int cz = static_cast<int>(std::floor(me.z));
-    const int y0 = std::max(-64, cy - R);
-    const int y1 = std::min(320, cy + R);
+    // Up or down only as far as a structure reaches (a far vault above or below you isn't worth a sweep through the sky).
+    const int Ry = std::min(R, 64);
+    const int y0 = std::max(-64, cy - Ry);
+    const int y1 = std::min(320, cy + Ry);
     const int nxz = 2 * R + 1;
     const int ny = y1 - y0 + 1;
     if (ny <= 0) return;
@@ -891,9 +897,10 @@ void VaultPredictor::scanForVaults(SDK::BlockSource* region, Vec3 const& me, flo
         ++scanSweeps;
     }
 
-    constexpr int kBudget = 12000;
+    // About 1.5 ms of a frame (at least 512 positions), so a big Max Distance takes longer to cover but never costs frames.
     const auto now = std::chrono::steady_clock::now();
-    for (int n = 0; n < kBudget && scanIndex < total; ++n, ++scanIndex) {
+    for (int n = 0; scanIndex < total; ++n, ++scanIndex) {
+        if (n >= 512 && (n % 256) == 0 && std::chrono::steady_clock::now() - now > std::chrono::microseconds(1500)) break;
         size_t i = scanIndex;
         const int dy = static_cast<int>(i % static_cast<size_t>(ny));
         i /= static_cast<size_t>(ny);
@@ -990,7 +997,7 @@ void VaultPredictor::onRenderLayer(Event& evG) {
         float dist;
     };
     std::vector<Pick> picks;
-    const float maxDist = std::clamp(static_cast<float>(std::get<FloatValue>(maxDistance)), 2.f, 128.f);
+    const float maxDist = std::clamp(static_cast<float>(std::get<FloatValue>(maxDistance)), 2.f, 256.f);
     const Vec3 me = player->getPos();
     if (std::get<BoolValue>(scanBlocks)) scanForVaults(region, me, maxDist);
     {
@@ -1178,7 +1185,15 @@ void VaultPredictor::onRenderLayer(Event& evG) {
         const Vec3 anchorWorld { pick.entry.pos.x + 0.5f, pick.entry.pos.y + 1.15f, pick.entry.pos.z + 0.5f };
         auto screen = WorldToScreen::convert(anchorWorld, true);
         if (!screen) continue;
-        const float scale = std::clamp(8.f / std::max(pick.dist, 1.f), 0.55f, 1.f);
+        float scale = std::clamp(8.f / std::max(pick.dist, 1.f), 0.55f, 1.f);
+        // Zooming magnifies the vault, so the box grows with it (Zoom Scaling), but never past what fits on the screen.
+        const float zoomF = std::max(ZoomState::factor, 1.f);
+        const float zoomPct = std::clamp(static_cast<float>(std::get<FloatValue>(zoomScaling)), 0.f, 100.f) / 100.f;
+        if (zoomF > 1.001f && zoomPct > 0.f && client->getGuiData()) {
+            const float rowEstimate = 4.f * (baseIcon + 6.f) * scale;
+            const float cap = std::clamp(0.9f * client->getGuiData()->screenSize.x / std::max(rowEstimate, 1.f), 1.f, 6.f);
+            scale *= std::clamp(std::pow(zoomF, zoomPct), 1.f, cap);
+        }
         const float ts = baseText * scale;
         const float S = baseIcon * scale;
         const float gap = 6.f * scale;
