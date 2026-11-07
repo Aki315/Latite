@@ -193,6 +193,10 @@ VaultPredictor::VaultPredictor()
                      FloatValue(2.f), FloatValue(128.f), FloatValue(1.f));
     addSetting("showIcons", LocalizeString::get("client.textmodule.vaultPredictor.showIcons.name"),
                LocalizeString::get("client.textmodule.vaultPredictor.showIcons.desc"), showIcons);
+    blockIcons.addEntry(EnumEntry(BlockIconsGame, LocalizeString::get("client.textmodule.vaultPredictor.blockIcons.game.name")));
+    blockIcons.addEntry(EnumEntry(BlockIconsFlat, LocalizeString::get("client.textmodule.vaultPredictor.blockIcons.flat.name")));
+    addEnumSetting("blockIcons", LocalizeString::get("client.textmodule.vaultPredictor.blockIcons.name"),
+                   LocalizeString::get("client.textmodule.vaultPredictor.blockIcons.desc"), blockIcons);
     addSliderSetting("iconSize", LocalizeString::get("client.textmodule.vaultPredictor.iconSize.name"),
                      LocalizeString::get("client.textmodule.vaultPredictor.iconSize.desc"), iconSize, FloatValue(8.f),
                      FloatValue(128.f), FloatValue(2.f), "showIcons"_istrue);
@@ -415,6 +419,20 @@ namespace {
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             return false;
         }
+    }
+
+    // The colour a block item gets in the flat style (the block's own colour, roughly); null when it isn't one of the block items.
+    const d2d::Color* flatBlockColor(std::string const& id) {
+        static const std::pair<const char*, d2d::Color> table[] = {
+            { "minecraft:iron_block", d2d::Color::RGB(222, 222, 222) },
+            { "minecraft:emerald_block", d2d::Color::RGB(36, 196, 84) },
+            { "minecraft:diamond_block", d2d::Color::RGB(90, 222, 214) },
+            { "minecraft:heavy_core", d2d::Color::RGB(72, 78, 86) },
+        };
+        for (auto const& [name, color] : table) {
+            if (id == name) return &color;
+        }
+        return nullptr;
     }
 
     // The first 8-aligned offset in [from, to) at which the object holds the 8-byte `value`; 0 = none. Only readable memory.
@@ -1484,15 +1502,51 @@ void VaultPredictor::onRenderLayer(Event& evG) {
 
             int withBlock = 0;
             mc.flush(false);
+            const bool flatBlocks = blockIcons.getSelectedKey() == BlockIconsFlat;
             for (auto const& job : jobs) {
+                // The flat style: a square in the block's colour with a lighter top and a darker side, like a cube seen from above.
+                if (flatBlocks) {
+                    if (const d2d::Color* base = flatBlockColor(job.item)) {
+                        const float inset = job.size * 0.1f;
+                        const float x0 = job.pos.x + inset, y0 = job.pos.y + inset;
+                        const float x1 = job.pos.x + job.size - inset, y1 = job.pos.y + job.size - inset;
+                        const float w = x1 - x0, h = y1 - y0;
+                        mc.fillRectangle(d2d::Rect(x0, y0, x1, y1), *base);
+                        mc.fillRectangle(d2d::Rect(x0, y0, x1, y0 + h * 0.3f), d2d::Color(1.f, 1.f, 1.f, 0.35f));
+                        mc.fillRectangle(d2d::Rect(x0 + w * 0.5f, y0 + h * 0.3f, x1, y1), d2d::Color(0.f, 0.f, 0.f, 0.28f));
+                        ++iconsDrawn;
+                        continue;
+                    }
+                }
                 void* counter = findItemCounter(job.item);
                 if (!counter) {
                     if (missing.size() < 80) missing += (missing.empty() ? "" : ", ") + job.item;
                     continue;
                 }
+                // A block item is built by the game from its Block, the way WAILA draws a block (not by changing the vault's stack).
+                if (SDK::Block* blk = blockForItem(counter, job.item)) {
+                    alignas(SDK::ItemStack) char blockStorage[sizeof(SDK::ItemStack)] = {};
+                    auto* blockStack = SDK::ItemStack::constructBlockItem(blockStorage, *blk);
+                    bool drawn = false;
+                    if (blockStack) {
+                        if (blockStack->getItem()) {
+                            blockStack->showPickUp = false;
+                            blockStack->wasPickedUp = false;
+                            blockStack->pickupTime = {};
+                            blockStack->itemCount = static_cast<uint8_t>(std::clamp(job.count, 1, 64));
+                            mc.drawItem(blockStack, job.pos, job.size / 48.f, 1.f);
+                            drawn = true;
+                        }
+                        blockStack->destruct();
+                    }
+                    if (drawn) {
+                        ++iconsDrawn;
+                        ++withBlock;
+                        continue;
+                    }
+                }
                 stack->item = reinterpret_cast<SDK::Item**>(counter);
-                stack->block = blockForItem(counter, job.item); // null for an ordinary item
-                if (stack->block) ++withBlock;
+                stack->block = nullptr;
                 stack->aux = 0;
                 stack->itemCount = static_cast<uint8_t>(std::clamp(job.count, 1, 64));
                 // Same convention as WAILA: the size is the icon width in the units of the position, divided by 48.

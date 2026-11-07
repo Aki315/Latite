@@ -48,6 +48,10 @@ private:
     static constexpr int TypeOminous = 2;
 
     // Where the on-screen alert sits (the first entry is the default).
+    // How block items are drawn (the first entry is the default).
+    static constexpr int BlockIconsGame = 0;
+    static constexpr int BlockIconsFlat = 1;
+
     static constexpr int PosTopCenter = 0;
     static constexpr int PosTopLeft = 1;
     static constexpr int PosTopRight = 2;
@@ -77,6 +81,7 @@ private:
     bool localPlayerId(int64_t& out) const; // The typed Player ID, else the one in the player list.
 
     EnumData vaultType;
+    EnumData blockIcons;
     ValueType seed = TextValue(L"");           // Blank = the seed the server sent when you joined.
     ValueType playerId = TextValue(L"");       // Blank (the normal case) = your unique actor id, read from the player list.
     ValueType notifyEnabled = BoolValue(true);
