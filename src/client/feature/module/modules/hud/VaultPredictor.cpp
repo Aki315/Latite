@@ -417,6 +417,46 @@ namespace {
         }
     }
 
+    // The first 8-aligned offset in [from, to) at which the object holds the 8-byte `value`; 0 = none. Only readable memory.
+    size_t findValueOffset(const void* obj, uintptr_t value, size_t from, size_t to) {
+        uint8_t buf[0x800];
+        if (to > sizeof(buf)) to = sizeof(buf);
+        if (!readableRange(obj, to) || !copyBytes(obj, buf, to)) return 0;
+        for (size_t off = from; off + 8 <= to; off += 8) {
+            uintptr_t v = 0;
+            std::memcpy(&v, buf + off, 8);
+            if (v == value) return off;
+        }
+        return 0;
+    }
+
+    // Like findValueOffset, but the value is what a pointer in the object points at (the object holds a pointer to it).
+    size_t findValueBehindPointer(const void* obj, uintptr_t value, size_t from, size_t to) {
+        uint8_t buf[0x800];
+        if (to > sizeof(buf)) to = sizeof(buf);
+        if (!readableRange(obj, to) || !copyBytes(obj, buf, to)) return 0;
+        for (size_t off = from; off + 8 <= to; off += 8) {
+            uintptr_t p = 0, v = 0;
+            std::memcpy(&p, buf + off, 8);
+            if (p < 0x10000 || (p & 7) || !readableRange(reinterpret_cast<const void*>(p), 8)) continue;
+            if (readRaw(reinterpret_cast<const void*>(p), 0, v) && v == value) return off;
+        }
+        return 0;
+    }
+
+    // Where a BlockLegacy keeps a pointer to one of its Blocks: a Block points back at its BlockLegacy at +0x68. 0 = none.
+    size_t findBlockPointerOffset(const void* legacy) {
+        uint8_t buf[0x800];
+        if (!readableRange(legacy, sizeof(buf)) || !copyBytes(legacy, buf, sizeof(buf))) return 0;
+        for (size_t off = 0x20; off + 8 <= sizeof(buf); off += 8) {
+            uintptr_t p = 0, back = 0;
+            std::memcpy(&p, buf + off, 8);
+            if (p < 0x10000 || (p & 7) || !readableRange(reinterpret_cast<const void*>(p + 0x68), 8)) continue;
+            if (readRaw(reinterpret_cast<const void*>(p), 0x68, back) && back == reinterpret_cast<uintptr_t>(legacy)) return off;
+        }
+        return 0;
+    }
+
     // What a list that held the anchor item but wasn't the item registry looked like (for the Debug Mode report).
     struct Rejected {
         bool set = false;
@@ -701,6 +741,60 @@ bool VaultPredictor::stepRegistrySearch(uintptr_t anchor) {
     return false;
 }
 
+// Block items (iron_block, heavy_core...) come out as a white square unless the stack also holds their Block. Where an Item keeps
+// its BlockLegacy and where a BlockLegacy keeps a Block isn't known for this version, so both are learned from the vault: its
+// item holds the vault's BlockLegacy, and that holds a pointer to one of the vault's Blocks.
+void VaultPredictor::linkBlockItems(SDK::Block* vaultBlock, void* vaultCounter) {
+    if (blockLinkState != 0) return;
+    blockLinkState = 2;
+    uintptr_t item = 0;
+    auto* legacy = vaultBlock ? vaultBlock->getBlockType() : nullptr;
+    if (!legacy || !vaultCounter || !readRaw(vaultCounter, 0, item) || !item) {
+        blockLinkNote = "no vault item or block to learn from";
+        return;
+    }
+    const uintptr_t legacyAddr = reinterpret_cast<uintptr_t>(legacy);
+    itemLegacyOff = findValueOffset(reinterpret_cast<const void*>(item), legacyAddr, 0x20, 0x400);
+    itemLegacyDeref = 0;
+    if (!itemLegacyOff) {
+        itemLegacyOff = findValueBehindPointer(reinterpret_cast<const void*>(item), legacyAddr, 0x20, 0x400);
+        itemLegacyDeref = 1;
+    }
+    legacyBlockOff = findBlockPointerOffset(legacy);
+    if (itemLegacyOff && legacyBlockOff) blockLinkState = 1;
+    blockLinkNote = std::format("item -> block type at +0x{:X}{}, block type -> block at +0x{:X}{}", itemLegacyOff,
+                                itemLegacyDeref ? " (behind a pointer)" : "", legacyBlockOff,
+                                blockLinkState == 1 ? "" : " (not found, block items stay white)");
+}
+
+// The Block to draw a block item with, or null for an ordinary item: item -> BlockLegacy -> Block, trusted only when the
+// BlockLegacy has the item's own id and the Block points back at it. Cached per id.
+SDK::Block* VaultPredictor::blockForItem(void* counter, std::string const& id) {
+    if (blockLinkState != 1) return nullptr;
+    auto cached = blockCache.find(id);
+    if (cached != blockCache.end()) return cached->second;
+
+    SDK::Block* result = nullptr;
+    do {
+        uintptr_t item = 0, legacy = 0, block = 0, back = 0;
+        if (!readRaw(counter, 0, item) || !item) break;
+        if (!readRaw(reinterpret_cast<const void*>(item), itemLegacyOff, legacy) || legacy < 0x10000) break;
+        if (itemLegacyDeref == 1 &&
+            (!readableRange(reinterpret_cast<const void*>(legacy), 8) || !readRaw(reinterpret_cast<const void*>(legacy), 0, legacy) || legacy < 0x10000))
+            break;
+        const void* lp = reinterpret_cast<const void*>(legacy);
+        if (!readableRange(lp, 0x800)) break;
+        const size_t nameOff = findItemNameOffset(lp);
+        char text[96];
+        if (!nameOff || !readItemString(static_cast<const char*>(lp) + nameOff, text, sizeof(text)) || id != text) break;
+        if (!readRaw(lp, legacyBlockOff, block) || block < 0x10000 || !readableRange(reinterpret_cast<const void*>(block + 0x68), 8)) break;
+        if (!readRaw(reinterpret_cast<const void*>(block), 0x68, back) || back != legacy) break;
+        result = reinterpret_cast<SDK::Block*>(block);
+    } while (false);
+    blockCache.emplace(id, result);
+    return result;
+}
+
 // The counter of an item (what an ItemStack points at), from the item registry once stepRegistrySearch has found it.
 void* VaultPredictor::findItemCounter(std::string const& id) {
     if (!registryFound) return nullptr;
@@ -708,6 +802,7 @@ void* VaultPredictor::findItemCounter(std::string const& id) {
     auto forget = [&](const char* why) {
         registryFound = false;
         itemCache.clear();
+        blockCache.clear();
         itemCacheRegistry = nullptr;
         regPhase = 0;
         regSpan = 0;
@@ -724,6 +819,7 @@ void* VaultPredictor::findItemCounter(std::string const& id) {
     }
     if (registry != itemCacheRegistry) {
         itemCache.clear();
+        blockCache.clear();
         itemCacheRegistry = registry;
     }
 
@@ -1133,10 +1229,13 @@ void VaultPredictor::onRenderLayer(Event& evG) {
                                                             pick.entry.pos.z, box.ominous);
                     for (auto const& s : result.items) {
                         vault_nbt::ItemInfo info;
-                        info.name = s.item;
+                        // A book that gets an enchantment from the vault is an enchanted book: its own item, name and icon.
+                        info.name = (s.item == "minecraft:book" && !s.enchant.empty()) ? std::string("minecraft:enchanted_book") : s.item;
                         info.count = s.count;
                         addColumn(info);
-                        if (notifyOn && (termMatches(notifyTerms, s.item) || termMatches(notifyTerms, s.enchant))) makeHot();
+                        if (notifyOn && (termMatches(notifyTerms, s.item) || termMatches(notifyTerms, info.name) ||
+                                         termMatches(notifyTerms, s.enchant)))
+                            makeHot();
                         auto& lines = cols.back().lines;
                         if (names && !s.variant.empty()) {
                             if (s.item == "minecraft:ominous_bottle") {
@@ -1174,7 +1273,6 @@ void VaultPredictor::onRenderLayer(Event& evG) {
             if (box.known) title = std::wstring(box.ominous ? L"Ominous Vault " : L"Vault ") + distText;
             else if (boxes.size() > 1) title = std::wstring(box.ominous ? L"If ominous: " : L"If normal: ") + distText;
             else title = L"Vault " + distText;
-            if (predicted) title += L" (predicted)";
             for (auto const& col : cols) {
                 if (col.hot) {
                     title = L"! " + title;
@@ -1382,6 +1480,9 @@ void VaultPredictor::onRenderLayer(Event& evG) {
                 else stepRegistrySearch(reinterpret_cast<uintptr_t>(originalItem));
             }
 
+            if (blockLinkState == 0 && originalItem) linkBlockItems(iconBlock, reinterpret_cast<void*>(originalItem));
+
+            int withBlock = 0;
             mc.flush(false);
             for (auto const& job : jobs) {
                 void* counter = findItemCounter(job.item);
@@ -1390,15 +1491,17 @@ void VaultPredictor::onRenderLayer(Event& evG) {
                     continue;
                 }
                 stack->item = reinterpret_cast<SDK::Item**>(counter);
-                stack->block = nullptr;
+                stack->block = blockForItem(counter, job.item); // null for an ordinary item
+                if (stack->block) ++withBlock;
                 stack->aux = 0;
                 stack->itemCount = static_cast<uint8_t>(std::clamp(job.count, 1, 64));
                 // Same convention as WAILA: the size is the icon width in the units of the position, divided by 48.
                 mc.drawItem(stack, job.pos, job.size / 48.f, 1.f);
                 ++iconsDrawn;
             }
-            iconReport = std::format("{} of {} icon(s) drawn{}{}; item registry: {}", iconsDrawn, jobs.size(),
-                                     missing.empty() ? "" : ", not found in the registry: ", missing,
+            iconReport = std::format("{} of {} icon(s) drawn ({} with a block){}{}; block link: {}; item registry: {}", iconsDrawn, jobs.size(),
+                                     withBlock, missing.empty() ? "" : ", not found in the registry: ", missing,
+                                     blockLinkNote.empty() ? std::string("not tried yet") : blockLinkNote,
                                      registryNote.empty() ? std::string("not read yet") : registryNote);
 
             stack->item = originalItem;

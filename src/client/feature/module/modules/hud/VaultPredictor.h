@@ -71,6 +71,8 @@ private:
     void handleBlockActorData(SDK::Packet* pkt);
     void* findItemCounter(std::string const& id);
     bool stepRegistrySearch(uintptr_t anchor);
+    void linkBlockItems(SDK::Block* vaultBlock, void* vaultCounter);
+    SDK::Block* blockForItem(void* counter, std::string const& id);
     void scanForVaults(SDK::BlockSource* region, Vec3 const& me, float maxDist);
     bool localPlayerId(int64_t& out) const; // The typed Player ID, else the one in the player list.
 
@@ -124,6 +126,14 @@ private:
     size_t registryLooked = 0;
     std::string registryRejected;  // Lists that held the vault's item but weren't the registry (Debug Mode).
     std::string registryFoundNote;
+
+    // Block items are drawn with their Block on the stack (render thread only); see linkBlockItems.
+    int blockLinkState = 0;     // 0 not tried, 1 learned, 2 could not be learned
+    size_t itemLegacyOff = 0;   // where an Item keeps its BlockLegacy
+    int itemLegacyDeref = 0;    // 1 when it keeps a pointer to a pointer
+    size_t legacyBlockOff = 0;  // where a BlockLegacy keeps a pointer to a Block
+    std::string blockLinkNote;
+    std::unordered_map<std::string, SDK::Block*> blockCache;
 
     // Vault type from the vault block's own state bits (render thread only): block -> 0 normal, 1 ominous, -1 unknown.
     std::unordered_map<const void*, int> ominousByBlock;
