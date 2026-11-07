@@ -47,6 +47,15 @@ private:
     static constexpr int TypeNormal = 1;
     static constexpr int TypeOminous = 2;
 
+    // Where the on-screen alert sits (the first entry is the default).
+    static constexpr int PosTopCenter = 0;
+    static constexpr int PosTopLeft = 1;
+    static constexpr int PosTopRight = 2;
+    static constexpr int PosCenter = 3;
+    static constexpr int PosBottomCenter = 4;
+    static constexpr int PosBottomLeft = 5;
+    static constexpr int PosBottomRight = 6;
+
     struct Entry {
         BlockPos pos {};
         vault_nbt::VaultData data;
@@ -68,7 +77,15 @@ private:
     ValueType seed = TextValue(L"");           // Blank = the seed the server sent when you joined.
     ValueType playerId = TextValue(L"");       // Blank (the normal case) = your unique actor id, read from the player list.
     ValueType notifyEnabled = BoolValue(true);
-    ValueType notifyItems = TextValue(L"heavy_core"); // Comma separated item ids / enchantments to be told about.
+    ValueType notifyItems = TextValue(L"heavy_core, wind_burst"); // Comma separated item ids / enchantments to be told about.
+    ValueType notifyScreen = BoolValue(true);   // The alert box on the screen.
+    ValueType notifyChat = BoolValue(true);     // A line in the chat.
+    EnumData notifyPosition;
+    ValueType notifyOffsetX = FloatValue(0.f);  // Moves the alert from its place, in pixels.
+    ValueType notifyOffsetY = FloatValue(0.f);
+    ValueType notifyTextSize = FloatValue(20.f);
+    ValueType notifyDuration = FloatValue(8.f); // Seconds an alert stays.
+    ValueType notifyPreview = BoolValue(false); // Keeps a sample alert on the screen so it can be placed.
     ValueType showNames = BoolValue(true);
     ValueType showAmounts = BoolValue(true);
     ValueType showEnchantments = BoolValue(true);
@@ -96,6 +113,8 @@ private:
     int registryRoot = 0;
     size_t registryOffset = 0;
     int registryDeref = 0;
+    size_t registryInner = 0; // For deref 3: where in the object found at registryOffset the registry pointer sits.
+    int registryStep = 0;     // Search attempts made so far (4 = given up until you leave the world).
     size_t registryVecOff = 0x38;
     size_t registryNameOff = 0x128; // Where the item's id string ("minecraft:...") sits in an Item.
     std::chrono::steady_clock::time_point lastRegistryTry {};
@@ -105,6 +124,12 @@ private:
     std::string stateNote;
     // Notifications (render thread only): vaults already announced, and the parsed list of things to be told about.
     std::unordered_set<uint64_t> notified;
+    struct Alert {
+        std::wstring title;  // What was found.
+        std::wstring detail; // Which vault and where.
+        std::chrono::steady_clock::time_point created;
+    };
+    std::vector<Alert> alerts; // Alerts on the screen, oldest first. Render thread only.
     std::wstring notifyParsedFrom;
     std::vector<std::string> notifyTerms;
 

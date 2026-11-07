@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <format>
@@ -154,6 +155,33 @@ VaultPredictor::VaultPredictor()
                LocalizeString::get("client.textmodule.vaultPredictor.notify.desc"), notifyEnabled);
     addSetting("notifyItems", LocalizeString::get("client.textmodule.vaultPredictor.notifyItems.name"),
                LocalizeString::get("client.textmodule.vaultPredictor.notifyItems.desc"), notifyItems, "notify"_istrue);
+    addSetting("notifyScreen", LocalizeString::get("client.textmodule.vaultPredictor.notifyScreen.name"),
+               LocalizeString::get("client.textmodule.vaultPredictor.notifyScreen.desc"), notifyScreen, "notify"_istrue);
+    addSetting("notifyChat", LocalizeString::get("client.textmodule.vaultPredictor.notifyChat.name"),
+               LocalizeString::get("client.textmodule.vaultPredictor.notifyChat.desc"), notifyChat, "notify"_istrue);
+    notifyPosition.addEntry(EnumEntry(PosTopCenter, LocalizeString::get("client.textmodule.vaultPredictor.pos.topCenter.name")));
+    notifyPosition.addEntry(EnumEntry(PosTopLeft, LocalizeString::get("client.textmodule.vaultPredictor.pos.topLeft.name")));
+    notifyPosition.addEntry(EnumEntry(PosTopRight, LocalizeString::get("client.textmodule.vaultPredictor.pos.topRight.name")));
+    notifyPosition.addEntry(EnumEntry(PosCenter, LocalizeString::get("client.textmodule.vaultPredictor.pos.center.name")));
+    notifyPosition.addEntry(EnumEntry(PosBottomCenter, LocalizeString::get("client.textmodule.vaultPredictor.pos.bottomCenter.name")));
+    notifyPosition.addEntry(EnumEntry(PosBottomLeft, LocalizeString::get("client.textmodule.vaultPredictor.pos.bottomLeft.name")));
+    notifyPosition.addEntry(EnumEntry(PosBottomRight, LocalizeString::get("client.textmodule.vaultPredictor.pos.bottomRight.name")));
+    addEnumSetting("notifyPosition", LocalizeString::get("client.textmodule.vaultPredictor.notifyPosition.name"),
+                   LocalizeString::get("client.textmodule.vaultPredictor.notifyPosition.desc"), notifyPosition);
+    addSliderSetting("notifyOffsetX", LocalizeString::get("client.textmodule.vaultPredictor.notifyOffsetX.name"),
+                     LocalizeString::get("client.textmodule.vaultPredictor.notifyOffsetX.desc"), notifyOffsetX, FloatValue(-800.f),
+                     FloatValue(800.f), FloatValue(1.f), "notifyScreen"_istrue);
+    addSliderSetting("notifyOffsetY", LocalizeString::get("client.textmodule.vaultPredictor.notifyOffsetY.name"),
+                     LocalizeString::get("client.textmodule.vaultPredictor.notifyOffsetY.desc"), notifyOffsetY, FloatValue(-600.f),
+                     FloatValue(600.f), FloatValue(1.f), "notifyScreen"_istrue);
+    addSliderSetting("notifyTextSize", LocalizeString::get("client.textmodule.vaultPredictor.notifyTextSize.name"),
+                     LocalizeString::get("client.textmodule.vaultPredictor.notifyTextSize.desc"), notifyTextSize, FloatValue(8.f),
+                     FloatValue(48.f), FloatValue(1.f), "notifyScreen"_istrue);
+    addSliderSetting("notifyDuration", LocalizeString::get("client.textmodule.vaultPredictor.notifyDuration.name"),
+                     LocalizeString::get("client.textmodule.vaultPredictor.notifyDuration.desc"), notifyDuration, FloatValue(2.f),
+                     FloatValue(60.f), FloatValue(1.f), "notifyScreen"_istrue);
+    addSetting("notifyPreview", LocalizeString::get("client.textmodule.vaultPredictor.notifyPreview.name"),
+               LocalizeString::get("client.textmodule.vaultPredictor.notifyPreview.desc"), notifyPreview, "notifyScreen"_istrue);
     addSetting("showNames", LocalizeString::get("client.textmodule.vaultPredictor.showNames.name"),
                LocalizeString::get("client.textmodule.vaultPredictor.showNames.desc"), showNames);
     addSetting("showAmounts", LocalizeString::get("client.textmodule.vaultPredictor.showAmounts.name"),
@@ -198,6 +226,7 @@ void VaultPredictor::reset() {
     itemCache.clear();
     itemCacheRegistry = nullptr;
     registryFound = false;
+    registryStep = 0;
     ominousByBlock.clear();
     notified.clear();
     scanIndex = 0;
@@ -358,7 +387,8 @@ namespace {
         }
         if (!copyBytes(chars, out, size)) return false;
         out[size] = 0;
-        return std::memcmp(out, "minecraft:", 10) == 0;
+        // An item id is "minecraft:name"; entity ids carry an event ("minecraft:goat<>") and are not items.
+        return std::memcmp(out, "minecraft:", 10) == 0 && std::strpbrk(out, "<>") == nullptr;
     }
 
     // Where in an Item the id string sits (the layout moves between game versions): the first 8-aligned offset that holds a
@@ -371,10 +401,19 @@ namespace {
         return 0;
     }
 
+    // What a list that looked like the item registry but wasn't held (for the Debug Mode report).
+    struct Rejected {
+        bool set = false;
+        size_t vecOff = 0;
+        size_t count = 0;
+        size_t named = 0;
+        char first[64] = {};
+    };
+
     // Does `reg` look like the item registry: a vector (begin/end pointers, somewhere in its first 0x100 bytes) of item
     // counters, each pointing at an Item with a "minecraft:..." id? Every read is guarded. On success `vecOff` is where the
     // vector sits and `nameOff` where the Items keep their id.
-    bool probeRegistry(const void* reg, size_t& vecOff, size_t& nameOff, size_t& countOut) {
+    bool probeRegistry(const void* reg, size_t& vecOff, size_t& nameOff, size_t& countOut, Rejected* rejected = nullptr) {
         uint8_t buf[0x108];
         if (!readableRange(reg, sizeof(buf)) || !copyBytes(reg, buf, sizeof(buf))) return false;
         for (size_t vo = 0x08; vo <= 0xF0; vo += 8) {
@@ -401,10 +440,33 @@ namespace {
                 }
             }
             if (tried >= 4 && good * 2 >= tried && off) {
-                vecOff = vo;
-                nameOff = off;
-                countOut = count;
-                return true;
+                // Other lists hold "minecraft:..." names too, so read the whole list: the item registry has the items that
+                // every game has.
+                bool stick = false, diamond = false;
+                size_t named = 0;
+                char first[64] = {};
+                for (size_t i = 0; i < count; ++i) {
+                    uintptr_t counter = 0, item = 0;
+                    if (!readRaw(reinterpret_cast<const void*>(begin), i * 8, counter) || !counter) continue;
+                    if (!readRaw(reinterpret_cast<const void*>(counter), 0, item) || !item) continue;
+                    if (!readItemString(reinterpret_cast<const char*>(item) + off, text, sizeof(text))) continue;
+                    if (!named++) std::snprintf(first, sizeof(first), "%.60s", text);
+                    if (std::strcmp(text, "minecraft:stick") == 0) stick = true;
+                    if (std::strcmp(text, "minecraft:diamond") == 0) diamond = true;
+                }
+                if (stick && diamond) {
+                    vecOff = vo;
+                    nameOff = off;
+                    countOut = count;
+                    return true;
+                }
+                if (rejected && !rejected->set) {
+                    rejected->set = true;
+                    rejected->vecOff = vo;
+                    rejected->count = count;
+                    rejected->named = named;
+                    std::memcpy(rejected->first, first, sizeof(first));
+                }
             }
         }
         return false;
@@ -419,13 +481,15 @@ namespace {
         return client;
     }
 
-    // The registry pointer for a remembered place: root object + offset, then the extra step the way it was found.
-    bool registryAt(int root, size_t offset, int deref, void*& out) {
+    // The registry pointer for a remembered place: root object + offset, then the extra step the way it was found (3: the
+    // pointer found there points at an object that holds the registry pointer at `inner`).
+    bool registryAt(int root, size_t offset, int deref, size_t inner, void*& out) {
         const void* obj = registryRootObject(root);
         uintptr_t p = 0;
         if (!obj || !readRaw(obj, offset, p) || !p) return false;
         if (deref == 1 && !readRaw(reinterpret_cast<const void*>(p), 0, p)) return false;
         if (deref == 2 && !readRaw(reinterpret_cast<const void*>(p), 8, p)) return false;
+        if (deref == 3 && !readRaw(reinterpret_cast<const void*>(p), inner, p)) return false;
         out = reinterpret_cast<void*>(p);
         return out != nullptr;
     }
@@ -502,49 +566,94 @@ void* VaultPredictor::findItemCounter(std::string const& id) {
     size_t vecOff = 0x38;
     if (registryFound) {
         void* cur = nullptr;
-        if (registryAt(registryRoot, registryOffset, registryDeref, cur) && cur == itemCacheRegistry && !itemCache.empty()) registry = cur;
+        if (registryAt(registryRoot, registryOffset, registryDeref, registryInner, cur) && cur == itemCacheRegistry && !itemCache.empty())
+            registry = cur;
     }
     if (!registry) {
+        // Four attempts, a second apart, each a bounded amount of work: 0 looks at what the Level, Minecraft and ClientInstance
+        // objects point at; 1 to 3 look one level deeper, in what those point at, one object per attempt. Then it stops
+        // (until you leave the world) and the Debug Mode report says what was looked at.
         const auto now = std::chrono::steady_clock::now();
-        if (lastRegistryTry.time_since_epoch().count() != 0 && now - lastRegistryTry < std::chrono::seconds(10)) return nullptr;
+        if (registryStep >= 4) return nullptr;
+        if (lastRegistryTry.time_since_epoch().count() != 0 && now - lastRegistryTry < std::chrono::seconds(1)) return nullptr;
         lastRegistryTry = now;
         registryFound = false;
 
         size_t nameOff = 0;
         size_t looked = 0;
+        Rejected rejected;
+        std::string rejectedText;
         const char* const rootNames[] = { "Level", "Minecraft", "ClientInstance" };
-        for (int root = 0; root < 3 && !registryFound; ++root) {
-            const void* obj = registryRootObject(root);
-            if (!obj) continue;
-            for (size_t off = 0x08; off <= 0x3000 && !registryFound; off += 8) {
-                uintptr_t p = 0;
-                if (!readableRange(static_cast<const char*>(obj) + off, 8) || !readRaw(obj, off, p) || p < 0x10000) continue;
-                ++looked;
-                for (int deref = 0; deref < 3 && !registryFound; ++deref) {
-                    uintptr_t c = p;
-                    if (deref == 1) {
-                        if (!readableRange(reinterpret_cast<const void*>(p), 8) || !readRaw(reinterpret_cast<const void*>(p), 0, c)) continue;
-                    } else if (deref == 2) {
-                        if (!readableRange(reinterpret_cast<const void*>(p), 16) || !readRaw(reinterpret_cast<const void*>(p), 8, c)) continue;
-                    }
-                    if (c < 0x10000) continue;
-                    size_t vo = 0, no = 0, cnt = 0;
-                    if (probeRegistry(reinterpret_cast<const void*>(c), vo, no, cnt)) {
-                        registry = reinterpret_cast<void*>(c);
-                        registryFound = true;
-                        registryRoot = root;
-                        registryOffset = off;
-                        registryDeref = deref;
-                        vecOff = vo;
-                        nameOff = no;
-                        registryNote = std::format("found in {} at +0x{:X}{} (list at +0x{:X}, item ids at +0x{:X}, {} slots)",
-                                                   rootNames[root], off, deref == 0 ? "" : deref == 1 ? " -> +0" : " -> +8", vo, no, cnt);
+
+        // A candidate registry pointer `c`, reached from root + off by `deref` (and `inner` for 3).
+        auto candidate = [&](uintptr_t c, int root, size_t off, int deref, size_t inner) {
+            if (c < 0x10000) return false;
+            size_t vo = 0, no = 0, cnt = 0;
+            rejected = Rejected {};
+            if (!probeRegistry(reinterpret_cast<const void*>(c), vo, no, cnt, &rejected)) {
+                if (rejected.set && rejectedText.size() < 300) {
+                    rejectedText += std::format(" [{} +0x{:X}{}: list at +0x{:X} has {} slots, {} item-like names, e.g. {}; no stick/diamond]",
+                                                rootNames[root], off, deref == 3 ? std::format(" -> +0x{:X}", inner) : std::string(),
+                                                rejected.vecOff, rejected.count, rejected.named, rejected.first);
+                }
+                return false;
+            }
+            registry = reinterpret_cast<void*>(c);
+            registryFound = true;
+            registryRoot = root;
+            registryOffset = off;
+            registryDeref = deref;
+            registryInner = inner;
+            vecOff = vo;
+            nameOff = no;
+            const std::string via = deref == 0 ? "" : deref == 1 ? " -> +0" : deref == 2 ? " -> +8" : std::format(" -> +0x{:X}", inner);
+            registryNote = std::format("found in {} at +0x{:X}{} (list at +0x{:X}, item ids at +0x{:X}, {} slots)", rootNames[root], off,
+                                       via, vo, no, cnt);
+            return true;
+        };
+
+        if (registryStep == 0) {
+            for (int root = 0; root < 3 && !registryFound; ++root) {
+                const void* obj = registryRootObject(root);
+                if (!obj) continue;
+                for (size_t off = 0x08; off <= 0x3000 && !registryFound; off += 8) {
+                    uintptr_t p = 0;
+                    if (!readableRange(static_cast<const char*>(obj) + off, 8) || !readRaw(obj, off, p) || p < 0x10000) continue;
+                    ++looked;
+                    for (int deref = 0; deref < 3 && !registryFound; ++deref) {
+                        uintptr_t c = p;
+                        if (deref == 1) {
+                            if (!readableRange(reinterpret_cast<const void*>(p), 8) || !readRaw(reinterpret_cast<const void*>(p), 0, c)) continue;
+                        } else if (deref == 2) {
+                            if (!readableRange(reinterpret_cast<const void*>(p), 16) || !readRaw(reinterpret_cast<const void*>(p), 8, c)) continue;
+                        }
+                        candidate(c, root, off, deref, 0);
                     }
                 }
             }
+        } else {
+            const int root = registryStep - 1;
+            const void* obj = registryRootObject(root);
+            for (size_t off = 0x08; obj && off <= 0x3000 && !registryFound; off += 8) {
+                uintptr_t p = 0;
+                if (!readableRange(static_cast<const char*>(obj) + off, 8) || !readRaw(obj, off, p) || p < 0x10000) continue;
+                uint8_t inside[0x400];
+                if (!readableRange(reinterpret_cast<const void*>(p), sizeof(inside)) ||
+                    !copyBytes(reinterpret_cast<const void*>(p), inside, sizeof(inside)))
+                    continue;
+                ++looked;
+                for (size_t inner = 0; inner < sizeof(inside) && !registryFound; inner += 8) {
+                    uintptr_t q = 0;
+                    std::memcpy(&q, inside + inner, 8);
+                    candidate(q, root, off, 3, inner);
+                }
+            }
         }
+        ++registryStep;
         if (!registryFound) {
-            registryNote = std::format("no item registry found: looked at {} pointers in the Level, Minecraft and ClientInstance objects", looked);
+            registryNote = std::format("no item registry found yet (attempt {} of 4: looked at {} pointers{}){}", registryStep, looked,
+                                       registryStep == 1 ? " in the Level, Minecraft and ClientInstance objects" : " one level deeper",
+                                       rejectedText);
             return nullptr;
         }
         registryNameOff = nameOff;
@@ -674,8 +783,11 @@ namespace {
 
     bool termMatches(std::vector<std::string> const& terms, std::string const& name) {
         if (terms.empty() || name.empty()) return false;
+        // The id ("bolt_armor_trim_smithing_template") and the name shown in the label ("Bolt Armor Trim") both count.
         const std::string n = normalizeTerm(name);
-        return std::find(terms.begin(), terms.end(), n) != terms.end();
+        const std::string shown = normalizeTerm(vault_nbt::prettyName(name));
+        return std::find(terms.begin(), terms.end(), n) != terms.end() ||
+               std::find(terms.begin(), terms.end(), shown) != terms.end();
     }
 
     struct IconJob {
@@ -713,7 +825,8 @@ void VaultPredictor::onRenderLayer(Event& evG) {
             if (d <= maxDist) picks.push_back({ entry, d });
         }
     }
-    if (picks.empty()) return;
+    // Nothing to do when there is no vault in range, no alert still on the screen and no preview asked for.
+    if (picks.empty() && alerts.empty() && !std::get<BoolValue>(notifyPreview)) return;
     std::sort(picks.begin(), picks.end(), [](Pick const& a, Pick const& b) { return a.dist < b.dist; });
 
     const int wanted = vaultType.getSelectedKey();
@@ -842,11 +955,17 @@ void VaultPredictor::onRenderLayer(Event& evG) {
                 if (notified.size() > 4096) notified.clear();
                 std::wstring list;
                 for (auto const& n : found) list += (list.empty() ? L"" : L", ") + n;
-                const std::wstring where = known ? (om ? L"an ominous vault" : L"a vault")
-                                                 : (om ? L"a vault, if it is ominous" : L"a vault, if it is normal");
-                const std::wstring msg = list + L" in " + where + L" (" + std::to_wstring(static_cast<int>(std::lround(pick.dist))) + L"m)";
-                Latite::getNotifications().push(msg);
-                Latite::get().getClientMessageQueue().push(util::WFormat(msg));
+                const std::wstring kind = known ? (om ? L"Ominous vault" : L"Vault") : (om ? L"Vault, if ominous" : L"Vault, if normal");
+                const std::wstring coords = std::to_wstring(pick.entry.pos.x) + L", " + std::to_wstring(pick.entry.pos.y) + L", " +
+                                            std::to_wstring(pick.entry.pos.z);
+                // On the screen (where Notify Position puts it) and/or in the chat: the items, then which vault and where.
+                if (std::get<BoolValue>(notifyScreen)) {
+                    alerts.push_back({ list, kind + L" at " + coords, std::chrono::steady_clock::now() });
+                    if (alerts.size() > 6) alerts.erase(alerts.begin());
+                }
+                if (std::get<BoolValue>(notifyChat)) {
+                    Latite::get().getClientMessageQueue().push(util::WFormat(L"[Vault] " + list + L" - " + kind + L" at " + coords));
+                }
             };
             if (!data.toEject.empty()) {
                 std::vector<std::wstring> found;
@@ -1123,6 +1242,56 @@ void VaultPredictor::onRenderLayer(Event& evG) {
                                    : std::string("none"),
                     iconReport.empty() ? std::string("not drawn yet") : iconReport, scanReport,
                     firstCols == 0 ? "title and note only (no rewards to draw)" : "rewards drawn");
+            }
+        }
+    }
+
+    // The alerts (Notify): a box for each, newest first, from the place Notify Position gives, moved by the two offsets.
+    {
+        const float duration = std::clamp(static_cast<float>(std::get<FloatValue>(notifyDuration)), 2.f, 60.f);
+        const auto nowT = std::chrono::steady_clock::now();
+        auto ageOf = [&](Alert const& a) { return std::chrono::duration<float>(nowT - a.created).count(); };
+        alerts.erase(std::remove_if(alerts.begin(), alerts.end(), [&](Alert const& a) { return ageOf(a) > duration; }), alerts.end());
+
+        std::vector<std::pair<Alert, float>> shown; // alert, opacity
+        for (auto it = alerts.rbegin(); it != alerts.rend(); ++it) {
+            const float left = duration - ageOf(*it);
+            shown.push_back({ *it, left < 0.6f ? std::clamp(left / 0.6f, 0.f, 1.f) : 1.f });
+        }
+        if (std::get<BoolValue>(notifyPreview))
+            shown.push_back({ Alert { L"Heavy Core, Wind Burst I book", L"Ominous vault at 123, 45, -678", nowT }, 1.f });
+
+        if (std::get<BoolValue>(notifyScreen) && !shown.empty() && client->getGuiData()) {
+            const Vec2 screenSize = client->getGuiData()->screenSize;
+            const float ats = std::clamp(static_cast<float>(std::get<FloatValue>(notifyTextSize)), 8.f, 48.f);
+            const float lineA = std::max(mc.getTextSize(L"Ag", font, ats, false).y, 6.f);
+            const float padA = ats * 0.45f;
+            const float gapA = ats * 0.3f;
+            const int where = notifyPosition.getSelectedKey();
+            const bool atTop = where == PosTopCenter || where == PosTopLeft || where == PosTopRight;
+            const bool atBottom = where == PosBottomCenter || where == PosBottomLeft || where == PosBottomRight;
+            const bool atLeft = where == PosTopLeft || where == PosBottomLeft;
+            const bool atRight = where == PosTopRight || where == PosBottomRight;
+            const float offX = static_cast<float>(std::get<FloatValue>(notifyOffsetX));
+            const float offY = static_cast<float>(std::get<FloatValue>(notifyOffsetY));
+            const float boxH = lineA + lineA * 0.8f + padA * 2.f;
+            // The edge the first box starts from: the top edge going down, or (at the bottom) the bottom edge going up.
+            float edge = atTop ? 30.f : atBottom ? screenSize.y - 70.f : screenSize.y * 0.5f - boxH * 0.5f;
+            const d2d::Color gold = d2d::Color::RGB(255, 215, 0);
+            for (auto const& [alert, opacity] : shown) {
+                const Vec2 tt = mc.getTextSize(alert.title, font, ats, false);
+                const Vec2 dt = mc.getTextSize(alert.detail, font, ats * 0.8f, false);
+                const float w = std::max(tt.x, dt.x) + padA * 2.f;
+                const float x = atLeft ? 10.f : atRight ? screenSize.x - w - 10.f : (screenSize.x - w) * 0.5f;
+                const float top = (atBottom ? edge - boxH : edge) + offY;
+                const d2d::Rect box(x + offX, top, x + offX + w, top + boxH);
+                mc.fillRoundedRectangle(box, d2d::Color(0.03f, 0.03f, 0.03f, 0.82f * opacity), ats * 0.3f);
+                mc.drawText(d2d::Rect(box.left + padA, box.top + padA, box.right - padA, box.top + padA + lineA), alert.title,
+                            gold.asAlpha(opacity), font, ats, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                mc.drawText(d2d::Rect(box.left + padA, box.top + padA + lineA, box.right - padA, box.bottom - padA), alert.detail,
+                            d2d::Colors::WHITE.asAlpha(opacity), font, ats * 0.8f, DWRITE_TEXT_ALIGNMENT_CENTER,
+                            DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                edge += atBottom ? -(boxH + gapA) : boxH + gapA;
             }
         }
     }

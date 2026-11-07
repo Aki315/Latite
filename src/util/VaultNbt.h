@@ -237,10 +237,14 @@ namespace vault_nbt {
         return n >= 1 && n <= 10 ? numerals[n] : std::to_string(n);
     }
 
-    // "minecraft:enchanted_golden_apple" -> "Enchanted Golden Apple".
+    // "minecraft:enchanted_golden_apple" -> "Enchanted Golden Apple". The smithing templates are named by what they are for
+    // ("minecraft:bolt_armor_trim_smithing_template" -> "Bolt Armor Trim", "netherite_upgrade_smithing_template" -> "Netherite
+    // Upgrade"), because the full names are far too long for a label.
     inline std::string prettyName(std::string id) {
         const size_t colon = id.find(':');
         if (colon != std::string::npos) id = id.substr(colon + 1);
+        const std::string tail = "_smithing_template";
+        if (id.size() > tail.size() && id.compare(id.size() - tail.size(), tail.size(), tail) == 0) id.erase(id.size() - tail.size());
         std::string out;
         bool up = true;
         for (char c : id) {
