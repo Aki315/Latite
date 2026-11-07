@@ -226,7 +226,11 @@ void VaultPredictor::reset() {
     itemCache.clear();
     itemCacheRegistry = nullptr;
     registryFound = false;
-    registryStep = 0;
+    regPhase = 0;
+    regSpan = 0;
+    regOff = 0;
+    registryLooked = 0;
+    registryRejected.clear();
     ominousByBlock.clear();
     notified.clear();
     scanIndex = 0;
@@ -410,10 +414,31 @@ namespace {
         char first[64] = {};
     };
 
-    // Does `reg` look like the item registry: a vector (begin/end pointers, somewhere in its first 0x100 bytes) of item
-    // counters, each pointing at an Item with a "minecraft:..." id? Every read is guarded. On success `vecOff` is where the
-    // vector sits and `nameOff` where the Items keep their id.
-    bool probeRegistry(const void* reg, size_t& vecOff, size_t& nameOff, size_t& countOut, Rejected* rejected = nullptr) {
+    // Does the array of `n` 8-byte values at `a` hold `v`? Guarded.
+    bool holdsValue(const uintptr_t* a, size_t n, uintptr_t v) {
+        __try {
+            for (size_t i = 0; i < n; ++i) {
+                if (a[i] == v) return true;
+            }
+            return false;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
+    // What a list that held the anchor item but wasn't the item registry looked like (for the Debug Mode report).
+    struct Rejected {
+        bool set = false;
+        size_t vecOff = 0;
+        size_t count = 0;
+        size_t named = 0;
+        char first[64] = {};
+    };
+
+    // Does `reg` hold the item registry? Somewhere in its first 0x100 bytes there must be a vector (begin and end pointers) of
+    // item counters that contains `anchor`, the counter of an item we already have (the vault's). The Items then show where
+    // they keep their id, and the list must hold the items every game has. Only memory known to be readable is read.
+    bool probeRegistry(const void* reg, uintptr_t anchor, size_t& vecOff, size_t& nameOff, size_t& countOut, Rejected* rejected) {
         uint8_t buf[0x108];
         if (!readableRange(reg, sizeof(buf)) || !copyBytes(reg, buf, sizeof(buf))) return false;
         for (size_t vo = 0x08; vo <= 0xF0; vo += 8) {
@@ -422,74 +447,67 @@ namespace {
             std::memcpy(&end, buf + vo + 8, 8);
             if (!begin || end <= begin || (begin & 7) || (end & 7)) continue;
             const size_t count = (end - begin) / 8;
-            if (count < 100 || count > 100000) continue;
+            if (count < 100 || count > 30000) continue;
+            if (!readableRange(reinterpret_cast<const void*>(begin), count * 8)) continue;
+            if (!holdsValue(reinterpret_cast<const uintptr_t*>(begin), count, anchor)) continue;
 
-            int good = 0, tried = 0;
-            size_t off = 0;
+            uintptr_t anchorItem = 0;
+            if (!readRaw(reinterpret_cast<const void*>(anchor), 0, anchorItem) || !anchorItem) continue;
+            const size_t off = findItemNameOffset(reinterpret_cast<const void*>(anchorItem));
+            if (!off) continue;
+
+            bool stick = false, diamond = false;
+            size_t named = 0;
+            char first[64] = {};
             char text[96];
-            for (size_t i = 0; i < count && tried < 12; ++i) {
+            for (size_t i = 0; i < count; ++i) {
                 uintptr_t counter = 0, item = 0;
-                if (!readRaw(reinterpret_cast<const void*>(begin), i * 8, counter)) break;
-                if (!counter || !readRaw(reinterpret_cast<const void*>(counter), 0, item) || !item) continue;
-                ++tried;
-                if (!off) {
-                    off = findItemNameOffset(reinterpret_cast<const void*>(item));
-                    if (off) ++good;
-                } else if (readItemString(reinterpret_cast<const char*>(item) + off, text, sizeof(text))) {
-                    ++good;
-                }
+                if (!readRaw(reinterpret_cast<const void*>(begin), i * 8, counter) || !counter) continue;
+                if (!readRaw(reinterpret_cast<const void*>(counter), 0, item) || !item) continue;
+                if (!readItemString(reinterpret_cast<const char*>(item) + off, text, sizeof(text))) continue;
+                if (!named++) std::snprintf(first, sizeof(first), "%.60s", text);
+                if (std::strcmp(text, "minecraft:stick") == 0) stick = true;
+                if (std::strcmp(text, "minecraft:diamond") == 0) diamond = true;
             }
-            if (tried >= 4 && good * 2 >= tried && off) {
-                // Other lists hold "minecraft:..." names too, so read the whole list: the item registry has the items that
-                // every game has.
-                bool stick = false, diamond = false;
-                size_t named = 0;
-                char first[64] = {};
-                for (size_t i = 0; i < count; ++i) {
-                    uintptr_t counter = 0, item = 0;
-                    if (!readRaw(reinterpret_cast<const void*>(begin), i * 8, counter) || !counter) continue;
-                    if (!readRaw(reinterpret_cast<const void*>(counter), 0, item) || !item) continue;
-                    if (!readItemString(reinterpret_cast<const char*>(item) + off, text, sizeof(text))) continue;
-                    if (!named++) std::snprintf(first, sizeof(first), "%.60s", text);
-                    if (std::strcmp(text, "minecraft:stick") == 0) stick = true;
-                    if (std::strcmp(text, "minecraft:diamond") == 0) diamond = true;
-                }
-                if (stick && diamond) {
-                    vecOff = vo;
-                    nameOff = off;
-                    countOut = count;
-                    return true;
-                }
-                if (rejected && !rejected->set) {
-                    rejected->set = true;
-                    rejected->vecOff = vo;
-                    rejected->count = count;
-                    rejected->named = named;
-                    std::memcpy(rejected->first, first, sizeof(first));
-                }
+            if (stick && diamond) {
+                vecOff = vo;
+                nameOff = off;
+                countOut = count;
+                return true;
+            }
+            if (rejected && !rejected->set) {
+                rejected->set = true;
+                rejected->vecOff = vo;
+                rejected->count = count;
+                rejected->named = named;
+                std::memcpy(rejected->first, first, sizeof(first));
             }
         }
         return false;
     }
 
-    // One of the objects the registry can hang off.
-    const void* registryRootObject(int root) {
+    // The memory a registry search starts from: 0 Level, 1 Minecraft, 2 ClientInstance, 3 MinecraftGame, 4 the game's image.
+    const char* rootBase(int root) {
         auto* client = SDK::ClientInstance::get();
         if (!client) return nullptr;
-        if (root == 0) return client->minecraft ? static_cast<const void*>(client->minecraft->getLevel()) : nullptr;
-        if (root == 1) return client->minecraft;
-        return client;
+        switch (root) {
+        case 0: return client->minecraft ? reinterpret_cast<const char*>(client->minecraft->getLevel()) : nullptr;
+        case 1: return reinterpret_cast<const char*>(client->minecraft);
+        case 2: return reinterpret_cast<const char*>(client);
+        case 3: return reinterpret_cast<const char*>(client->minecraftGame);
+        default: return reinterpret_cast<const char*>(GetModuleHandleW(nullptr));
+        }
     }
 
-    // The registry pointer for a remembered place: root object + offset, then the extra step the way it was found (3: the
-    // pointer found there points at an object that holds the registry pointer at `inner`).
+    // The registry pointer for a remembered place: root + offset, then the extra step the way it was found (3: the pointer
+    // found there points at an object that holds the registry pointer at `inner`).
     bool registryAt(int root, size_t offset, int deref, size_t inner, void*& out) {
-        const void* obj = registryRootObject(root);
+        const char* base = rootBase(root);
         uintptr_t p = 0;
-        if (!obj || !readRaw(obj, offset, p) || !p) return false;
-        if (deref == 1 && !readRaw(reinterpret_cast<const void*>(p), 0, p)) return false;
-        if (deref == 2 && !readRaw(reinterpret_cast<const void*>(p), 8, p)) return false;
-        if (deref == 3 && !readRaw(reinterpret_cast<const void*>(p), inner, p)) return false;
+        if (!base || !readableRange(base + offset, 8) || !readRaw(base, offset, p) || !p) return false;
+        if (deref == 1 && (!readableRange(reinterpret_cast<const void*>(p), 8) || !readRaw(reinterpret_cast<const void*>(p), 0, p))) return false;
+        if (deref == 2 && (!readableRange(reinterpret_cast<const void*>(p), 16) || !readRaw(reinterpret_cast<const void*>(p), 8, p))) return false;
+        if (deref == 3 && (!readableRange(reinterpret_cast<const void*>(p), inner + 8) || !readRaw(reinterpret_cast<const void*>(p), inner, p))) return false;
         out = reinterpret_cast<void*>(p);
         return out != nullptr;
     }
@@ -551,125 +569,177 @@ namespace {
     }
 } // namespace
 
-void* VaultPredictor::findItemCounter(std::string const& id) {
+// Looks for the item registry (what WAILA reads its tool icons from: a list of item counters, each pointing at an Item) for
+// about 2 ms of a frame at most, and carries on from where it stopped on the next frame, so it can never freeze the game. The
+// registry is recognised by `anchor`, the counter of an item we already have (the vault's): it is the list that holds it.
+// Pass 0 looks at what the main game objects (Level, Minecraft, ClientInstance, MinecraftGame) and the game's static data
+// point at; pass 1 one level deeper in the objects. Returns true once it is found.
+bool VaultPredictor::stepRegistrySearch(uintptr_t anchor) {
+    if (registryFound) return true;
+    if (regPhase >= 2 || !anchor) return false;
     auto* client = SDK::ClientInstance::get();
-    auto* level = client && client->minecraft ? client->minecraft->getLevel() : nullptr;
-    if (!level) {
-        registryNote = "no level";
-        return nullptr;
+    if (!client) return false;
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto budget = std::chrono::microseconds(2000);
+
+    struct Span {
+        int root;
+        size_t start; // offset from the root's base
+        size_t size;
+        const char* name;
+    };
+    std::vector<Span> spans;
+    if (client->minecraft && client->minecraft->getLevel()) spans.push_back({ 0, 0, 0x3000, "Level" });
+    if (client->minecraft) spans.push_back({ 1, 0, 0x3000, "Minecraft" });
+    spans.push_back({ 2, 0, 0x3000, "ClientInstance" });
+    if (client->minecraftGame) spans.push_back({ 3, 0, 0x3000, "MinecraftGame" });
+    const size_t objectSpans = spans.size();
+
+    const char* const image = rootBase(4);
+    size_t imageSize = 0;
+    if (image) {
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(image + dos->e_lfanew);
+        imageSize = nt->OptionalHeader.SizeOfImage;
+        const IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
+        for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
+            const DWORD f = sec[i].Characteristics;
+            if ((f & IMAGE_SCN_MEM_WRITE) && !(f & IMAGE_SCN_MEM_EXECUTE) && !(f & IMAGE_SCN_MEM_DISCARDABLE))
+                spans.push_back({ 4, sec[i].VirtualAddress, sec[i].Misc.VirtualSize, "game data" });
+        }
     }
 
-    // The item registry (what WAILA reads its tool icons from): a list of item counters, each pointing at an Item. Its place
-    // in the game's objects has moved between versions, so when the remembered place stops holding up, the Level, Minecraft
-    // and ClientInstance objects are searched for it; the place that works is remembered.
-    void* registry = nullptr;
-    size_t vecOff = 0x38;
-    if (registryFound) {
-        void* cur = nullptr;
-        if (registryAt(registryRoot, registryOffset, registryDeref, registryInner, cur) && cur == itemCacheRegistry && !itemCache.empty())
-            registry = cur;
-    }
-    if (!registry) {
-        // Four attempts, a second apart, each a bounded amount of work: 0 looks at what the Level, Minecraft and ClientInstance
-        // objects point at; 1 to 3 look one level deeper, in what those point at, one object per attempt. Then it stops
-        // (until you leave the world) and the Debug Mode report says what was looked at.
-        const auto now = std::chrono::steady_clock::now();
-        if (registryStep >= 4) return nullptr;
-        if (lastRegistryTry.time_since_epoch().count() != 0 && now - lastRegistryTry < std::chrono::seconds(1)) return nullptr;
-        lastRegistryTry = now;
-        registryFound = false;
+    Rejected rejected;
+    auto candidate = [&](uintptr_t c, int root, const char* name, size_t off, int deref, size_t inner) -> bool {
+        if (c < 0x10000) return false;
+        size_t vo = 0, no = 0, cnt = 0;
+        rejected = Rejected {};
+        if (!probeRegistry(reinterpret_cast<const void*>(c), anchor, vo, no, cnt, &rejected)) {
+            if (rejected.set && registryRejected.size() < 300) {
+                registryRejected += std::format(" [{} +0x{:X}{}: list at +0x{:X} has {} slots, {} item-like names, e.g. {}; no stick/diamond]", name,
+                                                off, deref == 3 ? std::format(" -> +0x{:X}", inner) : std::string(), rejected.vecOff,
+                                                rejected.count, rejected.named, rejected.first);
+            }
+            return false;
+        }
+        const std::string via = deref == 0 ? "" : deref == 1 ? " -> +0" : deref == 2 ? " -> +8" : std::format(" -> +0x{:X}", inner);
+        registryFound = true;
+        registryRoot = root;
+        registryOffset = off;
+        registryDeref = deref;
+        registryInner = inner;
+        registryVecOff = vo;
+        registryNameOff = no;
+        registryFoundNote = std::format("found in {} at +0x{:X}{} (list at +0x{:X}, item ids at +0x{:X}, {} slots)", name, off, via, vo, no, cnt);
+        registryNote = registryFoundNote;
+        itemCache.clear();
+        itemCacheRegistry = nullptr; // read on the next lookup
+        return true;
+    };
 
-        size_t nameOff = 0;
-        size_t looked = 0;
-        Rejected rejected;
-        std::string rejectedText;
-        const char* const rootNames[] = { "Level", "Minecraft", "ClientInstance" };
-
-        // A candidate registry pointer `c`, reached from root + off by `deref` (and `inner` for 3).
-        auto candidate = [&](uintptr_t c, int root, size_t off, int deref, size_t inner) {
-            if (c < 0x10000) return false;
-            size_t vo = 0, no = 0, cnt = 0;
-            rejected = Rejected {};
-            if (!probeRegistry(reinterpret_cast<const void*>(c), vo, no, cnt, &rejected)) {
-                if (rejected.set && rejectedText.size() < 300) {
-                    rejectedText += std::format(" [{} +0x{:X}{}: list at +0x{:X} has {} slots, {} item-like names, e.g. {}; no stick/diamond]",
-                                                rootNames[root], off, deref == 3 ? std::format(" -> +0x{:X}", inner) : std::string(),
-                                                rejected.vecOff, rejected.count, rejected.named, rejected.first);
-                }
+    uint8_t chunk[0x1000];
+    const size_t spanCount = regPhase == 0 ? spans.size() : objectSpans;
+    while (regSpan < spanCount && !registryFound) {
+        const Span sp = spans[regSpan];
+        const char* base = rootBase(sp.root);
+        if (!base) {
+            ++regSpan;
+            regOff = 0;
+            continue;
+        }
+        size_t chunkStart = static_cast<size_t>(-1);
+        bool chunkOk = false;
+        while (regOff < sp.size && !registryFound) {
+            if (std::chrono::steady_clock::now() - t0 > budget) {
+                if (std::get<BoolValue>(debugMode))
+                    registryNote = std::format("still looking for the item registry (pass {} of 2, {} pointers looked at so far){}", regPhase + 1,
+                                               registryLooked, registryRejected);
                 return false;
             }
-            registry = reinterpret_cast<void*>(c);
-            registryFound = true;
-            registryRoot = root;
-            registryOffset = off;
-            registryDeref = deref;
-            registryInner = inner;
-            vecOff = vo;
-            nameOff = no;
-            const std::string via = deref == 0 ? "" : deref == 1 ? " -> +0" : deref == 2 ? " -> +8" : std::format(" -> +0x{:X}", inner);
-            registryNote = std::format("found in {} at +0x{:X}{} (list at +0x{:X}, item ids at +0x{:X}, {} slots)", rootNames[root], off,
-                                       via, vo, no, cnt);
-            return true;
-        };
-
-        if (registryStep == 0) {
-            for (int root = 0; root < 3 && !registryFound; ++root) {
-                const void* obj = registryRootObject(root);
-                if (!obj) continue;
-                for (size_t off = 0x08; off <= 0x3000 && !registryFound; off += 8) {
-                    uintptr_t p = 0;
-                    if (!readableRange(static_cast<const char*>(obj) + off, 8) || !readRaw(obj, off, p) || p < 0x10000) continue;
-                    ++looked;
-                    for (int deref = 0; deref < 3 && !registryFound; ++deref) {
-                        uintptr_t c = p;
-                        if (deref == 1) {
-                            if (!readableRange(reinterpret_cast<const void*>(p), 8) || !readRaw(reinterpret_cast<const void*>(p), 0, c)) continue;
-                        } else if (deref == 2) {
-                            if (!readableRange(reinterpret_cast<const void*>(p), 16) || !readRaw(reinterpret_cast<const void*>(p), 8, c)) continue;
-                        }
-                        candidate(c, root, off, deref, 0);
-                    }
-                }
+            const size_t off = sp.start + regOff;
+            const size_t cs = off & ~static_cast<size_t>(0xFFF);
+            if (cs != chunkStart) {
+                chunkStart = cs;
+                chunkOk = readableRange(base + cs, sizeof(chunk)) && copyBytes(base + cs, chunk, sizeof(chunk));
             }
-        } else {
-            const int root = registryStep - 1;
-            const void* obj = registryRootObject(root);
-            for (size_t off = 0x08; obj && off <= 0x3000 && !registryFound; off += 8) {
-                uintptr_t p = 0;
-                if (!readableRange(static_cast<const char*>(obj) + off, 8) || !readRaw(obj, off, p) || p < 0x10000) continue;
+            if (!chunkOk) {
+                regOff = cs + 0x1000 - sp.start; // skip the rest of an unreadable page
+                continue;
+            }
+            regOff += 8;
+            uintptr_t p = 0;
+            std::memcpy(&p, chunk + (off - cs), 8);
+            if (p < 0x10000 || (p & 7)) continue;
+            if (sp.root == 4 && image && p >= reinterpret_cast<uintptr_t>(image) && p < reinterpret_cast<uintptr_t>(image) + imageSize) continue;
+            ++registryLooked;
+            if (regPhase == 0) {
+                for (int deref = 0; deref < 3 && !registryFound; ++deref) {
+                    uintptr_t c = p;
+                    if (deref == 1) {
+                        if (!readableRange(reinterpret_cast<const void*>(p), 8) || !readRaw(reinterpret_cast<const void*>(p), 0, c)) continue;
+                    } else if (deref == 2) {
+                        if (!readableRange(reinterpret_cast<const void*>(p), 16) || !readRaw(reinterpret_cast<const void*>(p), 8, c)) continue;
+                    }
+                    candidate(c, sp.root, sp.name, off, deref, 0);
+                }
+            } else {
                 uint8_t inside[0x400];
                 if (!readableRange(reinterpret_cast<const void*>(p), sizeof(inside)) ||
                     !copyBytes(reinterpret_cast<const void*>(p), inside, sizeof(inside)))
                     continue;
-                ++looked;
                 for (size_t inner = 0; inner < sizeof(inside) && !registryFound; inner += 8) {
                     uintptr_t q = 0;
                     std::memcpy(&q, inside + inner, 8);
-                    candidate(q, root, off, 3, inner);
+                    candidate(q, sp.root, sp.name, off, 3, inner);
                 }
             }
         }
-        ++registryStep;
-        if (!registryFound) {
-            registryNote = std::format("no item registry found yet (attempt {} of 4: looked at {} pointers{}){}", registryStep, looked,
-                                       registryStep == 1 ? " in the Level, Minecraft and ClientInstance objects" : " one level deeper",
-                                       rejectedText);
-            return nullptr;
-        }
-        registryNameOff = nameOff;
+        if (registryFound) break;
+        ++regSpan;
+        regOff = 0;
+    }
+    if (registryFound) return true;
+    ++regPhase;
+    regSpan = 0;
+    regOff = 0;
+    if (regPhase >= 2) {
+        registryNote = std::format("no item registry found: looked at {} pointers in the Level, Minecraft, ClientInstance and MinecraftGame objects, "
+                                   "what they point at and the game's data; none was a list holding the vault's item{}",
+                                   registryLooked, registryRejected);
+    }
+    return false;
+}
+
+// The counter of an item (what an ItemStack points at), from the item registry once stepRegistrySearch has found it.
+void* VaultPredictor::findItemCounter(std::string const& id) {
+    if (!registryFound) return nullptr;
+
+    auto forget = [&](const char* why) {
+        registryFound = false;
+        itemCache.clear();
+        itemCacheRegistry = nullptr;
+        regPhase = 0;
+        regSpan = 0;
+        regOff = 0;
+        registryLooked = 0;
+        registryRejected.clear();
+        registryNote = why;
+    };
+
+    void* registry = nullptr;
+    if (!registryAt(registryRoot, registryOffset, registryDeref, registryInner, registry)) {
+        forget("the item registry moved; looking for it again");
+        return nullptr;
+    }
+    if (registry != itemCacheRegistry) {
         itemCache.clear();
         itemCacheRegistry = registry;
-        registryVecOff = vecOff;
-    } else {
-        vecOff = registryVecOff;
     }
 
     if (itemCache.empty()) {
-        itemCacheRegistry = registry;
         uintptr_t begin = 0, end = 0;
-        if (!readRaw(registry, vecOff, begin) || !readRaw(registry, vecOff + 8, end) || !begin || end <= begin) {
-            registryNote = "the item list is empty";
-            registryFound = false;
+        if (!readRaw(registry, registryVecOff, begin) || !readRaw(registry, registryVecOff + 8, end) || !begin || end <= begin) {
+            forget("the item list is empty; looking for it again");
             return nullptr;
         }
         size_t slots = 0, withItem = 0;
@@ -688,8 +758,8 @@ void* VaultPredictor::findItemCounter(std::string const& id) {
             itemCache.emplace(name.substr(10), reinterpret_cast<void*>(counter));
             if (examples.size() < 60) examples += (examples.empty() ? "" : ", ") + name;
         }
-        registryNote += std::format("; {} slot(s), {} with an item, {} names read (e.g. {})", slots, withItem, itemCache.size() / 2,
-                                    examples.empty() ? std::string("none") : examples);
+        registryNote = registryFoundNote + std::format("; {} slot(s), {} with an item, {} names read (e.g. {})", slots, withItem,
+                                                       itemCache.size() / 2, examples.empty() ? std::string("none") : examples);
     }
 
     auto it = itemCache.find(id.find(':') == std::string::npos ? "minecraft:" + id : id);
@@ -1314,6 +1384,12 @@ void VaultPredictor::onRenderLayer(Event& evG) {
             auto originalItem = stack->item;
             auto originalBlock = stack->block;
             auto originalAux = stack->aux;
+
+            // The item registry is looked for a little each frame; the vault's own item is what it is recognised by.
+            if (!registryFound) {
+                if (!originalItem) registryNote = "the vault block's item stack has no item, so the item registry can't be recognised";
+                else stepRegistrySearch(reinterpret_cast<uintptr_t>(originalItem));
+            }
 
             mc.flush(false);
             for (auto const& job : jobs) {

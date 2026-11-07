@@ -70,6 +70,7 @@ private:
     void reset();
     void handleBlockActorData(SDK::Packet* pkt);
     void* findItemCounter(std::string const& id);
+    bool stepRegistrySearch(uintptr_t anchor);
     void scanForVaults(SDK::BlockSource* region, Vec3 const& me, float maxDist);
     bool localPlayerId(int64_t& out) const; // The typed Player ID, else the one in the player list.
 
@@ -114,10 +115,15 @@ private:
     size_t registryOffset = 0;
     int registryDeref = 0;
     size_t registryInner = 0; // For deref 3: where in the object found at registryOffset the registry pointer sits.
-    int registryStep = 0;     // Search attempts made so far (4 = given up until you leave the world).
     size_t registryVecOff = 0x38;
     size_t registryNameOff = 0x128; // Where the item's id string ("minecraft:...") sits in an Item.
-    std::chrono::steady_clock::time_point lastRegistryTry {};
+    // The registry search (render thread only): it works a little each frame and keeps its place here.
+    int regPhase = 0;          // 0 what the main objects and the game's data point at, 1 one level deeper, 2 gave up
+    size_t regSpan = 0;
+    size_t regOff = 0;
+    size_t registryLooked = 0;
+    std::string registryRejected;  // Lists that held the vault's item but weren't the registry (Debug Mode).
+    std::string registryFoundNote;
 
     // Vault type from the vault block's own state bits (render thread only): block -> 0 normal, 1 ominous, -1 unknown.
     std::unordered_map<const void*, int> ominousByBlock;
