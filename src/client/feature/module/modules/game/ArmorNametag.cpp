@@ -190,9 +190,10 @@ void ArmorNametag::onPacketReceive(Event& evG) {
     // When the server sends a player's whole armor again, the estimate for that player starts over from it. This
     // also handles re-equipping the same armor with the same durability (where comparing only the numeric damage
     // value is ambiguous).
-    if (static_cast<DurabilitySource>(durabilitySource.getSelectedKey()) == DurabilitySource::Estimated) {
-        if (const uint64_t id = ArmorEstimate::syncArmorPacket(pkt); id != 0) trackers.noteArmorSync(id);
-    }
+    const uint64_t syncId = ArmorEstimate::syncArmorPacket(pkt);
+    // Debug: shows whether the server resends a player's armor when it wears down, or only when it is put on or swapped.
+    if (syncId != 0 && std::get<BoolValue>(debugLog)) Logger::Info("[ArmorNametag] server resent the armor of runtime id {}", syncId);
+    if (syncId != 0 && static_cast<DurabilitySource>(durabilitySource.getSelectedKey()) == DurabilitySource::Estimated) trackers.noteArmorSync(syncId);
 }
 
 // Remember what you swung at them with, so the next health drop can be turned into armor wear.

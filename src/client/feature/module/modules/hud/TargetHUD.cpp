@@ -995,7 +995,11 @@ TargetHUD::TargetHUD()
 // When the server sends a player's whole armor again (put on, taken off, swapped), the estimate for them starts over.
 void TargetHUD::onPacketReceive(Event& evG) {
     auto& ev = reinterpret_cast<PacketReceiveEvent&>(evG);
-    if (const uint64_t id = ArmorEstimate::syncArmorPacket(ev.getPacket()); id != 0) armorTrackers.noteArmorSync(id);
+    if (const uint64_t id = ArmorEstimate::syncArmorPacket(ev.getPacket()); id != 0) {
+        // Debug: shows whether the server resends a player's armor when it wears down, or only when it is put on or swapped.
+        if (std::get<BoolValue>(debugLog)) Logger::Info("[TargetHUD] server resent the armor of runtime id {}", id);
+        armorTrackers.noteArmorSync(id);
+    }
 }
 
 // Every tick: follow the armor of every player, not only the one on the HUD.
