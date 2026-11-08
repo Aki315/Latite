@@ -24,6 +24,11 @@
 // shows up in a slot, the server's durability for a piece goes down (repaired / fresh piece), the server sends the
 // whole armor again (see syncArmorPacket), and the owner of the tracker calls reset() on a new target.
 //
+// The server does not send a player's armor wear after every hit, only now and then (when it resends the whole armor).
+// Those numbers are real, so each one is also used to check the guess: the loss the server reports is compared with what
+// was counted since its last number, and the wear per hit is scaled by the difference (see Calibration). So the guess
+// gets closer to the server's rule as the fight goes on, and a repaired piece is simply taken from the server's numbers.
+//
 // Limits, since the client can't see everything:
 //  - The enchantment levels of THEIR armor are not read, only "enchanted or not", so Protection IV and Unbreaking III
 //    are assumed. Your own weapon's Sharpness level is read when the item's enchantment data can be understood.
@@ -281,6 +286,14 @@ namespace ArmorEstimate {
 
     // One player's armor guess. It starts from what the server last sent for each piece and adds the wear from the hits
     // it sees. New pieces start over, and numbers the server sends later win over the guess.
+    // What the server's own numbers say about the wear per hit. Every time the server sends newer durability for a piece,
+    // the real loss since its last number is compared with what the guess had counted, and the guess is scaled by the
+    // difference from then on. It is shared by every player (the wear per hit is the server's rule, not the player's).
+    struct Calibration {
+        float scale = 1.f; // Multiplies the wear of every counted hit.
+        int samples = 0;   // How many times the server has confirmed or corrected the guess.
+    };
+
     class Tracker {
     public:
         void reset() {
@@ -293,13 +306,9 @@ namespace ArmorEstimate {
         // Whose guess this is (the runtime id), for the log only.
         uint64_t owner = 0;
 
-        // The server sent this player's whole armor again: forget the wear, trust what it says.
-        void resync() {
-            for (auto& p : pieces) {
-                p.baseDamage = p.lastServerDamage;
-                p.wear = 0.f;
-            }
-        }
+        // The server sent this player's whole armor again. The next update starts from what it says. The wear is not
+        // thrown away here, because update() compares it with the server's new numbers to learn how far off the guess is.
+        void resync() { resyncPending = true; }
 
         // armor: the four armor stacks (null = empty slot). totalHealth: health + golden hearts, < 0 if unknown.
         // ownHit: you swung at them just now, so `weapon` is what hit. Otherwise a drop is counted only if
@@ -308,7 +317,8 @@ namespace ArmorEstimate {
         // health: their health without golden hearts, or < 0 if unknown. Used to notice a death or a respawn, and to
         // tell a hit from golden hearts running out (see below). absorption: their golden hearts, for the log only.
         void update(SDK::ItemStack* const* armor, float totalHealth, bool ownHit, Weapon const& weapon,
-                    float otherHitDamage, Assumptions const& assume, float health = -1.f, float absorption = 0.f) {
+                    float otherHitDamage, Assumptions const& assume, float health = -1.f, float absorption = 0.f,
+                    Calibration* cal = nullptr) {
             const float previousLife = lastLife; // Their health at the last update (before it is overwritten below).
             const char kSlotNames[] = "HCLB";
             // Dead (health 0) or alive again (a jump of 10 or more, which healing can't do but a respawn does): the
@@ -352,6 +362,10 @@ namespace ArmorEstimate {
             float defense = 0.f, toughness = 0.f;
             int count = 0;
             int enchantedPieces = 0; // Armor pieces that glow: taken as Protection IV.
+            float realLoss = 0.f, guessedLoss = 0.f; // Pieces the server just gave newer numbers for, to learn from.
+            int sampled = 0;
+            const bool resynced = resyncPending;
+            resyncPending = false;
             for (int i = 0; i < 4; ++i) {
                 auto& piece = pieces[i];
                 auto* item = armor[i] ? armor[i]->getItem() : nullptr;
@@ -379,12 +393,19 @@ namespace ArmorEstimate {
                     piece.baseDamage = server;
                     piece.wear = 0.f;
                 } else if (server > piece.lastServerDamage) {
-                    // The server sent newer numbers: trust them over the guess.
+                    // The server sent newer numbers: trust them over the guess, and see how far off the guess was.
+                    realLoss += static_cast<float>(server - piece.baseDamage);
+                    guessedLoss += piece.wear;
+                    ++sampled;
                     if (assume.debug) {
                         Logger::Info("[ArmorEstimate] player {}: {} server damage {} -> {}: trusting the server, guess was "
                                      "{} (wear {:.1f} dropped)", owner, kSlotNames[i], piece.lastServerDamage, server,
                                      piece.baseDamage + static_cast<int>(std::lround(piece.wear)), piece.wear);
                     }
+                    piece.baseDamage = server;
+                    piece.wear = 0.f;
+                } else if (resynced) {
+                    // The whole armor came again with the same numbers: the server's word, so the guess starts over.
                     piece.baseDamage = server;
                     piece.wear = 0.f;
                 }
@@ -397,6 +418,20 @@ namespace ArmorEstimate {
                 toughness += t;
                 ++count;
                 if (glint) ++enchantedPieces;
+            }
+
+            // Learn from the server's numbers. Needs a few points of wear on both sides, or one hit more or less would
+            // swing the result. The change is limited so one odd reading (an anvil, Mending) can't wreck the scale.
+            if (cal && sampled > 0 && guessedLoss >= 6.f && realLoss >= 6.f) {
+                const float ratio = std::clamp(realLoss / guessedLoss, 0.25f, 4.f);
+                const float before = cal->scale;
+                cal->scale = std::clamp(before * std::pow(ratio, cal->samples == 0 ? 1.f : 0.6f), 0.5f, 5.f);
+                ++cal->samples;
+                if (assume.debug) {
+                    Logger::Info("[ArmorEstimate] player {}: the server's numbers show {:.0f} lost on {} pieces, the guess "
+                                 "had {:.1f}: wear per hit scale {:.2f} -> {:.2f}", owner, realLoss, sampled, guessedLoss,
+                                 before, cal->scale);
+                }
             }
 
             if (jumpPending) return; // See above: not counting anything while the health reading is in doubt.
@@ -465,7 +500,7 @@ namespace ArmorEstimate {
                 if (!piece.known) continue;
                 // Unbreaking III ignores 30% of the wear, and only an enchanted (glowing) piece can have it.
                 const float kept = assume.unbreaking && piece.glint ? 0.7f : 1.f;
-                piece.wear += static_cast<float>(perPiece) * kept * assume.wearScale;
+                piece.wear += static_cast<float>(perPiece) * kept * assume.wearScale * (cal ? cal->scale : 1.f);
             }
             if (assume.debug) {
                 Logger::Info("[ArmorEstimate] player {}: counted {} hit: health+golden hearts {:.1f} -> {:.1f} (drop {:.2f}), "
@@ -496,6 +531,7 @@ namespace ArmorEstimate {
         float lastHealth = -1.f; // Health + golden hearts at the last update.
         float lastLife = -1.f;   // Health alone at the last update, for spotting a death or a respawn.
         int jumpTicks = 0;       // How many updates in a row the health read has been 10 or more above lastLife.
+        bool resyncPending = false; // The server sent the whole armor again since the last update.
     };
     // The four armor stacks of a player (null = empty slot or nothing that wears out).
     inline void readArmorStacks(SDK::Actor* actor, SDK::ItemStack* (&out)[4]) {
@@ -559,7 +595,7 @@ namespace ArmorEstimate {
                 SDK::ItemStack* stacks[4];
                 readArmorStacks(actor, stacks);
                 entry.tracker.update(stacks, total, own, own ? swing->second.weapon : Weapon {}, otherHitDamage, assume,
-                                     vitals.health, vitals.absorption);
+                                     vitals.health, vitals.absorption, &calibration);
             }
 
             // Drop players that have been gone for about two minutes.
@@ -583,7 +619,11 @@ namespace ArmorEstimate {
             return it == entries.end() ? nullptr : &it->second.tracker;
         }
 
+        // How the guess has been corrected by the server's numbers so far (for the log and the settings).
+        Calibration const& calibrationState() const { return calibration; }
+
         void forget() {
+            calibration = {};
             entries.clear();
             ownHits.clear();
             std::lock_guard lock(mutex);
@@ -599,6 +639,7 @@ namespace ArmorEstimate {
             std::chrono::steady_clock::time_point when;
             Weapon weapon;
         };
+        Calibration calibration;
         std::unordered_map<uint64_t, Entry> entries;
         std::unordered_map<uint64_t, OwnHit> ownHits;
         std::mutex mutex;
