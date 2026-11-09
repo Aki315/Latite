@@ -47,6 +47,9 @@ private:
     ValueType localPlayer = BoolValue(true);
     ValueType items = BoolValue(true);
 
+    // Hitboxes of mobs (zombies, cows, villagers, ...). Turn off to only get players, plus whatever the other switches allow.
+    ValueType mobs = BoolValue(true);
+
     // Hides the hitbox of everything that is not a player or a mob: projectiles (arrows, ender pearls, wind charges,
     // snowballs, ...), boats, minecarts, armor stands, XP orbs, TNT, falling blocks and so on.
     ValueType hideEntities = BoolValue(true);

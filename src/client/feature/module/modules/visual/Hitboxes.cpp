@@ -72,6 +72,8 @@ Hitboxes::Hitboxes()
                LocalizeString::get("client.module.hitboxes.lookingAt.desc"), this->lineColor, "showLookingAt"_istrue);
     addSetting("items", LocalizeString::get("client.module.hitboxes.items.name"),
                LocalizeString::get("client.module.hitboxes.items.desc"), items);
+    addSetting("mobs", LocalizeString::get("client.module.hitboxes.mobs.name"),
+               LocalizeString::get("client.module.hitboxes.mobs.desc"), mobs);
     addSetting("hideEntities", LocalizeString::get("client.module.hitboxes.hideEntities.name"),
                LocalizeString::get("client.module.hitboxes.hideEntities.desc"), hideEntities);
     addSetting("showOwnThirdPerson", LocalizeString::get("client.module.hitboxes.showOwnThirdPerson.name"),
@@ -114,6 +116,7 @@ void Hitboxes::onRenderLevel(RenderLevelEvent& event) {
     const float reach = std::get<FloatValue>(hitRange).value;
 
     const bool hideOthers = std::get<BoolValue>(hideEntities);
+    const bool showMobsOn = std::get<BoolValue>(mobs);
     const float maxDist = std::get<FloatValue>(maxDistance).value;
     const bool limitDist = maxDist > 0.f && lp != nullptr;
     const bool shrinkFar = std::get<BoolValue>(shrinkWithDistance) && limitDist;
@@ -122,6 +125,13 @@ void Hitboxes::onRenderLevel(RenderLevelEvent& event) {
         if (entt->isInvisible()) continue;
         if (entt == lp && !drawSelf) continue;
         if (!std::get<BoolValue>(items) && entt->getEntityTypeID() == 64) continue;
+
+        // "Show Mobs" off: no hitbox on mobs. A mob is anything that is not a player, a dropped item or one of the
+        // non-mob things above (those have their own switches).
+        if (!showMobsOn && !entt->isPlayer() && entt->getEntityTypeID() != 64 &&
+            !isNonMobEntity(entt->getEntityTypeName())) {
+            continue;
+        }
 
         // "Hide Entities": no hitbox for projectiles, boats, minecarts, armor stands and the like. Players and
         // mobs always keep theirs. Dropped items have their own switch above.

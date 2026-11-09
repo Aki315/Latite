@@ -769,6 +769,8 @@
         "client.module.hitboxes.showLookingAt.desc": "Whether or not to show the looking at line.",
         "client.module.hitboxes.lookingAt.desc": "Looking At color",
         "client.module.hitboxes.items.desc": "Show item hitboxes",
+        "client.module.hitboxes.mobs.name": "Mobs",
+        "client.module.hitboxes.mobs.desc": "Draws hitboxes on mobs (zombies, cows, villagers and so on). Turn this off to only get players.",
         "client.module.blockOutline.name": "Block Overlay",
         "client.module.blockOutline.renderThrough.name": "Render Through",
         "client.module.blockOutline.transparent.name": "Transparent",
