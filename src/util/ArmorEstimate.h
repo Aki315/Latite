@@ -37,9 +37,9 @@
 //    never scaled up.
 //  - Swapping to an identical fresh piece with no gap, no packet and no enchant change can't be told apart from the
 //    same piece; the next durability number the server sends corrects it.
-//  - Golden hearts: a drop of only golden hearts (their health did not change) is not counted as a hit unless you just
-//    swung at them, since golden hearts also vanish when the golden apple's effect runs out. So a hit that was
-//    completely soaked up by golden hearts is not counted for hits you didn't throw.
+//  - Golden hearts: a drop of only golden hearts (their health did not change) counts as a hit unless it looks like the
+//    golden apple's effect running out (a whole number such as 4.0 or 8.0, or a big pool emptied at once). That is a
+//    guess from the size of the drop, so now and then an effect ending is counted, or a hit of exactly 4.0 is skipped.
 //  - A hit is only recognised from a health drop: 0.05 or more right after you swung, 0.3 or more for hits you didn't
 //    throw. A hit that takes no health at all (a block, a swing the server cancelled) isn't counted.
 //  - The damage numbers follow Blurry's Java PvP addon (item damage, crit x1.5, Sharpness 0.5 x level + 0.5, Strength
@@ -445,16 +445,24 @@ namespace ArmorEstimate {
             // from anything else (poison, fire, hunger).
             if (drop < (ownHit ? 0.05f : 0.3f)) return;
 
-            // Golden hearts go down without anyone hitting the player: when the effect from a golden apple runs out the
-            // hearts just disappear, which looked like a hit and wore the armor (and eating one next to a drop that
-            // happens to line up does the same). So a drop you did not throw only counts when their real health went
-            // down too. A hit that the golden hearts soaked up completely is missed on purpose: no wear is better than
-            // wear that was never there. Your own swings still count either way.
+            // Golden hearts go down without a hit too: when the effect from a golden apple runs out they just disappear,
+            // which looked like a hit and wore the armor. But on a server where everyone carries golden hearts, nearly
+            // every hit lands on them first, so ignoring all of those meant almost no hit was counted. A drop that touched
+            // only the golden hearts is told apart by its size: the effect ending removes a whole number (4.0, 8.0) or
+            // empties a big pool at once, while a hit through armor is a fraction (0.6, 1.9, 3.2 left 0.8). The first
+            // kind is skipped; the second counts as a hit. Your own swings count either way.
             if (!ownHit && previousLife >= 0.f && health >= 0.f && previousLife - health < 0.05f) {
-                Logger::Info("[ArmorEstimate] ignored a drop of {:.1f} on a player: health {:.1f} -> {:.1f} did not change, "
-                             "only golden hearts went down (now {:.1f}); not a hit",
-                             drop, previousLife, health, absorption);
-                return;
+                const bool wholeNumber = drop >= 0.95f && std::abs(drop - std::round(drop)) < 0.03f;
+                const bool emptiedAtOnce = absorption < 0.05f && drop >= 3.f;
+                if (wholeNumber || emptiedAtOnce) {
+                    if (assume.debug) {
+                        Logger::Info("[ArmorEstimate] ignored a drop of {:.1f} on a player: health {:.1f} -> {:.1f} did not "
+                                     "change, only golden hearts went down (now {:.1f}) in a way that looks like the "
+                                     "effect ending; not a hit",
+                                     drop, previousLife, health, absorption);
+                    }
+                    return;
+                }
             }
 
             // How much of a hit gets through their armor: armor points, then Protection (IV on every enchanted piece).
