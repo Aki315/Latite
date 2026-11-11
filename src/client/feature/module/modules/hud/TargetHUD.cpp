@@ -1182,10 +1182,11 @@ bool TargetHUD::gatherInfo(bool preview, TargetInfo& info) {
                 auto* stack = actor->getArmor(slot);
                 if (stack && stack->getItem()) info.armor[slot] = stack;
             }
-            if (std::get<BoolValue>(debugLog)) logRealArmor(info);
             if (std::get<BoolValue>(estimateArmor)) {
                 updateArmorEstimate(info);
             }
+            // After the estimate, so the log line can show it next to the server's number.
+            if (std::get<BoolValue>(debugLog)) logRealArmor(info);
         }
         if (equipment->handContainer) {
             // The hand container holds the main hand in slot 0 and the offhand in slot 1.
