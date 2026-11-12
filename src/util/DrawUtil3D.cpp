@@ -2,13 +2,33 @@
 #include "DrawUtil3D.h"
 #include "mc/common/client/renderer/MeshUtils.h"
 #include <mc/common/client/renderer/Tessellator.h>
+#include "ZoomState.h"
+#include "mc/common/client/game/ClientInstance.h"
+#include "mc/common/client/gui/GuiData.h"
 
 #include <algorithm>
 #include <cmath>
 
 namespace {
-    // About how wide one screen pixel is, in blocks, per block of distance (roughly a 70 degree fov at 1080p).
+    // The fallback for how wide one screen pixel is, in blocks, per block of distance (roughly a 70 degree fov at 1080p),
+    // for when the real view can't be read.
     constexpr float kBlocksPerPixelPerBlock = 0.0015f;
+
+    // How wide one screen pixel really is, in blocks, per block of distance, from the game's current projection, the
+    // screen height in pixels and the Zoom module's magnification. With a fixed number the lines were too thick whenever
+    // the view was narrower than assumed (zoomed in, a low fov, a high resolution), which is when far players are looked at.
+    float blocksPerPixelPerBlock() {
+        auto* client = SDK::ClientInstance::get();
+        if (!client || !client->minecraftGame || !client->minecraftGame->gameRenderer || !client->getGuiData())
+            return kBlocksPerPixelPerBlock;
+
+        const float focal = client->minecraftGame->gameRenderer->lastProjectionMatrix._m[1][1]; // 1 / tan(fov / 2)
+        const float heightPx = client->getGuiData()->screenSize.y;
+        if (!(focal > 0.1f && focal < 20.f) || !(heightPx >= 100.f)) return kBlocksPerPixelPerBlock;
+
+        const float zoom = std::max(ZoomState::factor, 1.f);
+        return 2.f / (focal * zoom * heightPx);
+    }
 
     Vec3 cross(Vec3 const& a, Vec3 const& b) {
         return { a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x };
@@ -17,7 +37,7 @@ namespace {
     // The four corners of a flat strip along a -> b that faces the camera. Its width is the same number of screen
     // pixels everywhere, so it is scaled with the distance to the camera at each end. Returns false for a line
     // that has no length.
-    bool makeStrip(Vec3 const& a, Vec3 const& b, Vec3 const& camera, float pixels, Vec3 (&out)[4]) {
+    bool makeStrip(Vec3 const& a, Vec3 const& b, Vec3 const& camera, float pixels, float perPixel, Vec3 (&out)[4]) {
         const Vec3 dir = b - a;
         const float len = dir.magnitude();
         if (len < 1e-5f) return false;
@@ -31,8 +51,8 @@ namespace {
         }
         side = side.normalized();
 
-        const float halfA = pixels * std::max(a.distance(camera), 0.5f) * kBlocksPerPixelPerBlock * 0.5f;
-        const float halfB = pixels * std::max(b.distance(camera), 0.5f) * kBlocksPerPixelPerBlock * 0.5f;
+        const float halfA = pixels * std::max(a.distance(camera), 0.5f) * perPixel * 0.5f;
+        const float halfB = pixels * std::max(b.distance(camera), 0.5f) * perPixel * 0.5f;
 
         out[0] = a - side * halfA;
         out[1] = a + side * halfA;
@@ -54,7 +74,7 @@ MCDrawUtil3D::MCDrawUtil3D(SDK::LevelRenderer* renderer, SDK::ScreenContext* ctx
 void MCDrawUtil3D::drawThickLine(Vec3 const& p1, Vec3 const& p2, d2d::Color const& color) {
     Vec3 strip[4];
     const Vec3 camera = levelRenderer->getLevelRendererPlayer()->getOrigin();
-    if (!makeStrip(p1, p2, camera, lineThickness, strip)) return;
+    if (!makeStrip(p1, p2, camera, lineThickness, blocksPerPixelPerBlock(), strip)) return;
     fillQuad(strip[0], strip[1], strip[2], strip[3], color);
 }
 
