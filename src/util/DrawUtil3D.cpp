@@ -71,16 +71,25 @@ MCDrawUtil3D::MCDrawUtil3D(SDK::LevelRenderer* renderer, SDK::ScreenContext* ctx
     }
 }
 
-void MCDrawUtil3D::drawThickLine(Vec3 const& p1, Vec3 const& p2, d2d::Color const& color) {
+float MCDrawUtil3D::pixelsAt(Vec3 const& p1, Vec3 const& p2) const {
+    if (falloffDistance <= 0.f || lineThickness <= 1.01f) return lineThickness;
+    const Vec3 camera = levelRenderer->getLevelRendererPlayer()->getOrigin();
+    const float dist = std::max(((p1 + p2) * 0.5f).distance(camera), 0.01f);
+    if (dist <= falloffDistance) return lineThickness;
+    return std::max(lineThickness * falloffDistance / dist, 1.f);
+}
+
+void MCDrawUtil3D::drawThickLine(Vec3 const& p1, Vec3 const& p2, d2d::Color const& color, float pixels) {
     Vec3 strip[4];
     const Vec3 camera = levelRenderer->getLevelRendererPlayer()->getOrigin();
-    if (!makeStrip(p1, p2, camera, lineThickness, blocksPerPixelPerBlock(), strip)) return;
+    if (!makeStrip(p1, p2, camera, pixels, blocksPerPixelPerBlock(), strip)) return;
     fillQuad(strip[0], strip[1], strip[2], strip[3], color);
 }
 
 void MCDrawUtil3D::drawLine(Vec3 const& p1, Vec3 const& p2, d2d::Color const& color, bool immediate) {
-    if (lineThickness > 1.01f) {
-        drawThickLine(p1, p2, color);
+    const float pixels = pixelsAt(p1, p2);
+    if (pixels > 1.01f) {
+        drawThickLine(p1, p2, color, pixels);
         if (immediate) flush();
         return;
     }
@@ -107,11 +116,12 @@ void MCDrawUtil3D::drawLine(Vec3 const& p1, Vec3 const& p2, d2d::Color const& co
 }
 
 void MCDrawUtil3D::drawQuad(Vec3 a, Vec3 b, Vec3 c, Vec3 d, d2d::Color const& col) {
-    if (lineThickness > 1.01f) {
-        drawThickLine(a, b, col);
-        drawThickLine(b, c, col);
-        drawThickLine(c, d, col);
-        drawThickLine(d, a, col);
+    const float pixels = pixelsAt(a, c);
+    if (pixels > 1.01f) {
+        drawThickLine(a, b, col, pixels);
+        drawThickLine(b, c, col, pixels);
+        drawThickLine(c, d, col, pixels);
+        drawThickLine(d, a, col, pixels);
         return;
     }
 

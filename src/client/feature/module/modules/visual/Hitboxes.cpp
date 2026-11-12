@@ -62,6 +62,8 @@ Hitboxes::Hitboxes()
     addSliderSetting("lineThickness", LocalizeString::get("client.module.hitboxes.lineThickness.name"),
                      LocalizeString::get("client.module.hitboxes.lineThickness.desc"), lineThickness, FloatValue(1.f),
                      FloatValue(10.f), FloatValue(0.5f));
+    addSetting("thinWithDistance", LocalizeString::get("client.module.hitboxes.thinWithDistance.name"),
+               LocalizeString::get("client.module.hitboxes.thinWithDistance.desc"), thinWithDistance);
     addSetting("showEyeLine", LocalizeString::get("client.module.hitboxes.showEyeLine.name"),
                LocalizeString::get("client.module.hitboxes.showEyeLine.desc"), this->showEyeLine);
     addSetting("eyeLine", LocalizeString::get("client.module.hitboxes.eyeLine.name"),
@@ -88,6 +90,8 @@ void Hitboxes::onRenderLevel(RenderLevelEvent& event) {
 
     auto dc = MCDrawUtil3D(SDK::ClientInstance::get()->levelRenderer, SDK::ScreenContext::instance3d, material);
     dc.setLineThickness(std::get<FloatValue>(lineThickness).value);
+    // Full thickness up to 3 blocks away, then thinner the further it is, so far hitboxes look like near ones.
+    dc.setThicknessFalloff(std::get<BoolValue>(thinWithDistance) ? 3.f : 0.f);
 
     auto lp = SDK::ClientInstance::get()->getLocalPlayer();
     auto level = SDK::ClientInstance::get()->minecraft->getLevel();

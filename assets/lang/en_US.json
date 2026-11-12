@@ -625,6 +625,8 @@
         "client.module.hitboxes.widthScale.desc": "Visual width multiplier of the hitbox (1.0 = real size). Does not change the real hitbox.",
         "client.module.hitboxes.heightScale.name": "Height Scale",
         "client.module.hitboxes.heightScale.desc": "Visual height multiplier of the hitbox (1.0 = real size). Does not change the real hitbox.",
+        "client.module.hitboxes.thinWithDistance.name": "Thinner With Distance",
+        "client.module.hitboxes.thinWithDistance.desc": "Thick lines get thinner the further away the hitbox is, like a normal hitbox, so a far hitbox does not turn into a solid blob. Line Thickness is the width up close (3 blocks away or nearer).",
         "client.module.hitboxes.lineThickness.name": "Line Thickness",
         "client.module.hitboxes.lineThickness.desc": "How thick the lines of the hitbox, eye line and looking-at line are, in pixels. 1 is the normal thin line.",
         "client.module.hitboxes.showEyeLine.name": "Show Eye Line",

@@ -31,6 +31,8 @@ private:
 
     // Thickness of every line that is drawn, in screen pixels (1 = the game's thin line).
     ValueType lineThickness = FloatValue(1.f);
+    // Thick lines get thinner with distance like a real object, so a far hitbox is not just a solid blob.
+    ValueType thinWithDistance = BoolValue(true);
 
     ValueType showEyeLine = BoolValue(true);
     ValueType eyeColor = ColorValue(1.f, 0.f, 0.f, 1.f);
