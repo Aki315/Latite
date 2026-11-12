@@ -14,4 +14,5 @@ private:
     ValueType opacity = FloatValue(0.6f);      // How strong the flash is, 0 = invisible, 1 = solid.
     ValueType matchVanillaFlash = BoolValue(true); // Only while the game's own flash is showing.
     ValueType onlyPlayers = BoolValue(false);
+    ValueType showOnSelf = BoolValue(false);       // Also recolor your own flash (visible in third person).
 };

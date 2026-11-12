@@ -2,6 +2,7 @@
 #include "HurtColor.h"
 #include "client/event/Eventing.h"
 #include "client/event/events/OverlayColorEvent.h"
+#include "mc/common/client/game/ClientInstance.h"
 
 #include <algorithm>
 
@@ -18,6 +19,9 @@ HurtColor::HurtColor()
     addSetting("onlyPlayers", LocalizeString::get("client.module.hurtColor.onlyPlayers.name"),
                LocalizeString::get("client.module.hurtColor.onlyPlayers.desc"), onlyPlayers);
 
+    addSetting("showOnSelf", LocalizeString::get("client.module.hurtColor.showOnSelf.name"),
+               LocalizeString::get("client.module.hurtColor.showOnSelf.desc"), showOnSelf);
+
     listen<OverlayColorEvent>(static_cast<EventListenerFunc>(&HurtColor::onActorOverlay));
 }
 
@@ -28,11 +32,25 @@ void HurtColor::onActorOverlay(Event& evGeneric) {
     auto* actor = ev.getActor();
     if (!actor) return;
 
-    // Recent damage: the entity is in its "just hurt" window.
-    if (actor->invulnerableTime <= 0) return;
-    // Keep the game's own timing: only recolor while its flash is actually showing (not the whole invulnerable
-    // window, which is longer). The creeper's white flash is left alone this way too.
-    if (std::get<BoolValue>(matchVanillaFlash) && ev.getColor().a <= 0.01f) return;
+    const bool isSelf = actor == SDK::ClientInstance::get()->getLocalPlayer();
+    if (isSelf && !std::get<BoolValue>(showOnSelf)) return;
+
+    // What the game picked for this entity right now. Its hurt flash is a red with some alpha; a creeper about to
+    // blow is white, and nothing is drawn (alpha 0) when there is no flash.
+    const Color game = ev.getColor();
+    const bool gameFlashing = game.a > 0.01f;
+    const bool whiteFlash = game.g > 0.6f && game.b > 0.6f;
+
+    if (isSelf) {
+        // Your own entity: the client knows your immunity time, so the longer window can be used too.
+        if (actor->invulnerableTime <= 0) return;
+        if (std::get<BoolValue>(matchVanillaFlash) && !gameFlashing) return;
+    } else {
+        // Other players and mobs: the client is never told how long they can't be hit again (that stays at 0 on
+        // their entity), so the only sign that they were hurt is the game's own red flash. The color follows that
+        // flash, whichever Match Game Flash is set to. The creeper's white flash is left alone.
+        if (!gameFlashing || whiteFlash) return;
+    }
 
     if (std::get<BoolValue>(onlyPlayers) && !actor->isPlayer()) return;
 
