@@ -18,6 +18,9 @@ private:
     // A player's box changes color while they are close enough to hit.
     ValueType rangeColorOn = BoolValue(true);
     ValueType hitRange = FloatValue(3.f);
+    // Only change the color when a hit could land: nothing solid between your eyes and the player.
+    ValueType needClearLine = BoolValue(true);
+    ValueType websBlock = BoolValue(true); // Cobwebs count as something in the way.
     ValueType rangeColor = ColorValue(1.f, 0.2f, 0.2f, 1.f);
 
     // Visual-only multipliers applied to the drawn box (1.0 = the real bounding box).
