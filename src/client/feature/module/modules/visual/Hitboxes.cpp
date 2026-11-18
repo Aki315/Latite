@@ -111,7 +111,10 @@ namespace {
         const float lx = bb.lower.x + inset, hx = bb.higher.x - inset;
         const float ly = bb.lower.y + inset, hy = bb.higher.y - inset;
         const float lz = bb.lower.z + inset, hz = bb.higher.z - inset;
-        if (hx <= lx || hy <= ly || hz <= lz) return !lineBlocked(region, eye, bb.getCenter(), websStop, blocksStop);
+        if (hx <= lx || hy <= ly || hz <= lz) return !lineBlocked(region, eye,
+                           Vec3 { (bb.lower.x + bb.higher.x) * 0.5f, (bb.lower.y + bb.higher.y) * 0.5f,
+                                  (bb.lower.z + bb.higher.z) * 0.5f },
+                           websStop, blocksStop);
 
         // The point of the box closest to your eyes first: it is the most likely to be clear.
         const Vec3 closest { std::clamp(eye.x, lx, hx), std::clamp(eye.y, ly, hy), std::clamp(eye.z, lz, hz) };
