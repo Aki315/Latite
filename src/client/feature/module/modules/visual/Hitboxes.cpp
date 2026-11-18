@@ -60,6 +60,7 @@ namespace {
     // after the one your eyes are in. A block entered right at the end point is not counted.
     bool lineBlocked(SDK::BlockSource* region, Vec3 const& from, Vec3 const& to, bool websStop, bool blocksStop) {
         const float dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
+        if (!std::isfinite(dx + dy + dz + from.x + from.y + from.z)) return false;
         if (dx * dx + dy * dy + dz * dz < 1e-6f) return false;
 
         int x = static_cast<int>(std::floor(from.x));
@@ -91,7 +92,11 @@ namespace {
             }
             if (t >= 0.9995f) break; // Reached the end point.
 
-            const HitBlock kind = classify(region->getBlock(x, y, z));
+            // Outside the world's height there is nothing to hit.
+            if (y < -64 || y > 320) continue;
+            // The BlockPos overload, the one the other modules use. The (int, int, int) one sits in a different
+            // place in the game's function table than the header says and crashed the game.
+            const HitBlock kind = classify(region->getBlock(BlockPos { x, y, z }));
             if ((kind == HitBlock::Stops && blocksStop) || (kind == HitBlock::Web && websStop)) return true;
         }
         return false;
