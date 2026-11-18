@@ -58,7 +58,7 @@ namespace {
 
     // Whether something stops a hit going from `from` to `to`: walks the blocks the line crosses, in order, starting
     // after the one your eyes are in. A block entered right at the end point is not counted.
-    bool lineBlocked(SDK::BlockSource* region, Vec3 const& from, Vec3 const& to, bool websStop) {
+    bool lineBlocked(SDK::BlockSource* region, Vec3 const& from, Vec3 const& to, bool websStop, bool blocksStop) {
         const float dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
         if (dx * dx + dy * dy + dz * dz < 1e-6f) return false;
 
@@ -92,21 +92,22 @@ namespace {
             if (t >= 0.9995f) break; // Reached the end point.
 
             const HitBlock kind = classify(region->getBlock(x, y, z));
-            if (kind == HitBlock::Stops || (kind == HitBlock::Web && websStop)) return true;
+            if ((kind == HitBlock::Stops && blocksStop) || (kind == HitBlock::Web && websStop)) return true;
         }
         return false;
     }
 
     // Can a hit land on this box from here? True when at least one of a few points on it (the closest point, the middle,
     // the head) can be reached without something stopping the line.
-    bool canReach(SDK::BlockSource* region, Vec3 const& eye, AABB const& bb, bool websStop) {
+    bool canReach(SDK::BlockSource* region, Vec3 const& eye, AABB const& bb, bool websStop, bool blocksStop) {
         const Vec3 closest { std::clamp(eye.x, bb.lower.x, bb.higher.x), std::clamp(eye.y, bb.lower.y, bb.higher.y),
                              std::clamp(eye.z, bb.lower.z, bb.higher.z) };
         const Vec3 mid { (bb.lower.x + bb.higher.x) * 0.5f, (bb.lower.y + bb.higher.y) * 0.5f,
                          (bb.lower.z + bb.higher.z) * 0.5f };
         const Vec3 head { mid.x, bb.higher.y - 0.15f, mid.z };
-        return !lineBlocked(region, eye, closest, websStop) || !lineBlocked(region, eye, mid, websStop) ||
-               !lineBlocked(region, eye, head, websStop);
+        return !lineBlocked(region, eye, closest, websStop, blocksStop) ||
+               !lineBlocked(region, eye, mid, websStop, blocksStop) ||
+               !lineBlocked(region, eye, head, websStop, blocksStop);
     }
 
     // Things that are neither a player nor a mob. Matched on the entity's name (minecraft:<name>), so it does not
@@ -141,7 +142,9 @@ Hitboxes::Hitboxes()
     addSetting("needClearLine", LocalizeString::get("client.module.hitboxes.needClearLine.name"),
                LocalizeString::get("client.module.hitboxes.needClearLine.desc"), needClearLine, "rangeColorOn"_istrue);
     addSetting("websBlock", LocalizeString::get("client.module.hitboxes.websBlock.name"),
-               LocalizeString::get("client.module.hitboxes.websBlock.desc"), websBlock, "rangeColorOn"_istrue);
+               LocalizeString::get("client.module.hitboxes.websBlock.desc"), websBlock, "needClearLine"_istrue);
+    addSetting("blocksBlock", LocalizeString::get("client.module.hitboxes.blocksBlock.name"),
+               LocalizeString::get("client.module.hitboxes.blocksBlock.desc"), blocksBlock, "needClearLine"_istrue);
     addSetting("rangeColor", LocalizeString::get("client.module.hitboxes.rangeColor.name"),
                LocalizeString::get("client.module.hitboxes.rangeColor.desc"), rangeColor, "rangeColorOn"_istrue);
     addSliderSetting("widthScale", LocalizeString::get("client.module.hitboxes.widthScale.name"),
@@ -216,6 +219,7 @@ void Hitboxes::onRenderLevel(RenderLevelEvent& event) {
     const float reach = std::get<FloatValue>(hitRange).value;
     const bool needLine = std::get<BoolValue>(needClearLine);
     const bool websStop = std::get<BoolValue>(websBlock);
+    const bool blocksStop = std::get<BoolValue>(blocksBlock);
     SDK::BlockSource* region = SDK::ClientInstance::get()->getRegion();
 
     const bool hideOthers = std::get<BoolValue>(hideEntities);
@@ -259,7 +263,7 @@ void Hitboxes::onRenderLevel(RenderLevelEvent& event) {
         bool inRange = checkRange && entt != lp && entt->isPlayer() && distanceToBox(selfEye, bb) <= reach;
         // And a hit has to be able to land: a player who covered himself with blocks (or cobwebs, if those count) is
         // in reach but not hittable, so the box keeps its normal color.
-        if (inRange && needLine && region) inRange = canReach(region, selfEye, bb, websStop);
+        if (inRange && needLine && region) inRange = canReach(region, selfEye, bb, websStop, blocksStop);
 
         // Max Distance: too far away, so not drawn at all.
         float distFade = 0.f; // 0 = right next to you, 1 = at the max distance
