@@ -102,17 +102,32 @@ namespace {
         return false;
     }
 
-    // Can a hit land on this box from here? True when at least one of a few points on it (the closest point, the middle,
-    // the head) can be reached without something stopping the line.
+    // Can a hit land on this box from here? True when any part of it can be reached without something stopping the line,
+    // so a player who is only partly covered (his hitbox sticking out of the cobwebs or blocks) still counts. The box
+    // is sampled on a grid of points (3 across, 5 up, 3 deep, a little inside the edges); the first clear line is enough,
+    // and a covered player's lines stop after a block or two, so this stays cheap.
     bool canReach(SDK::BlockSource* region, Vec3 const& eye, AABB const& bb, bool websStop, bool blocksStop) {
-        const Vec3 closest { std::clamp(eye.x, bb.lower.x, bb.higher.x), std::clamp(eye.y, bb.lower.y, bb.higher.y),
-                             std::clamp(eye.z, bb.lower.z, bb.higher.z) };
-        const Vec3 mid { (bb.lower.x + bb.higher.x) * 0.5f, (bb.lower.y + bb.higher.y) * 0.5f,
-                         (bb.lower.z + bb.higher.z) * 0.5f };
-        const Vec3 head { mid.x, bb.higher.y - 0.15f, mid.z };
-        return !lineBlocked(region, eye, closest, websStop, blocksStop) ||
-               !lineBlocked(region, eye, mid, websStop, blocksStop) ||
-               !lineBlocked(region, eye, head, websStop, blocksStop);
+        constexpr float inset = 0.03f;
+        const float lx = bb.lower.x + inset, hx = bb.higher.x - inset;
+        const float ly = bb.lower.y + inset, hy = bb.higher.y - inset;
+        const float lz = bb.lower.z + inset, hz = bb.higher.z - inset;
+        if (hx <= lx || hy <= ly || hz <= lz) return !lineBlocked(region, eye, bb.getCenter(), websStop, blocksStop);
+
+        // The point of the box closest to your eyes first: it is the most likely to be clear.
+        const Vec3 closest { std::clamp(eye.x, lx, hx), std::clamp(eye.y, ly, hy), std::clamp(eye.z, lz, hz) };
+        if (!lineBlocked(region, eye, closest, websStop, blocksStop)) return true;
+
+        for (int iy = 0; iy < 5; ++iy) {
+            const float y = ly + (hy - ly) * (static_cast<float>(iy) / 4.f);
+            for (int ix = 0; ix < 3; ++ix) {
+                const float x = lx + (hx - lx) * (static_cast<float>(ix) / 2.f);
+                for (int iz = 0; iz < 3; ++iz) {
+                    const float z = lz + (hz - lz) * (static_cast<float>(iz) / 2.f);
+                    if (!lineBlocked(region, eye, Vec3 { x, y, z }, websStop, blocksStop)) return true;
+                }
+            }
+        }
+        return false;
     }
 
     // Things that are neither a player nor a mob. Matched on the entity's name (minecraft:<name>), so it does not

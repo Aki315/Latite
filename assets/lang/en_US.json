@@ -622,7 +622,7 @@
         "client.module.hitboxes.hitRange.name": "Hit Range",
         "client.module.hitboxes.hitRange.desc": "How close, in blocks, a player must be for the color to change. It is measured from your eyes to the closest part of their hitbox.",
         "client.module.hitboxes.needClearLine.name": "Normal Color When Covered",
-        "client.module.hitboxes.needClearLine.desc": "While a player is in your Hit Range, the In Range Color is only used if you could actually hit him. If he covers himself with blocks or cobwebs so that you can't, his hitbox goes back to the normal color. It checks a few points on his hitbox, so a player who is only partly covered still counts as hittable. Turn this off to change the color by distance alone.",
+        "client.module.hitboxes.needClearLine.desc": "While a player is in your Hit Range, the In Range Color is only used if you could actually hit him. If he covers himself with blocks or cobwebs so that you can't, his hitbox goes back to the normal color. It checks points all over his hitbox, so a player whose hitbox sticks out of the cover still counts as hittable. Turn this off to change the color by distance alone.",
         "client.module.hitboxes.websBlock.name": "Cobwebs Count As Cover",
         "client.module.hitboxes.websBlock.desc": "A cobweb between you and the player counts as cover, like a block. Turn this off if cobwebs do not stop your hits on the server you play.",
         "client.module.hitboxes.blocksBlock.name": "Blocks Count As Cover",
