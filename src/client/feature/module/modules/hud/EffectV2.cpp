@@ -367,19 +367,20 @@ void EffectV2::render(DrawUtil& dcGeneric, bool isDefault, bool inEditor) {
     }
     if (wide) pillW = std::max(pillW, slot * 1.9f);
 
-    const float pillH = wide ? std::max(timeH + 6.f, slot * 0.86f) : timeH + 4.f;
-    const float pillGap = wide ? std::max(3.f, slot * 0.1f) : std::max(2.f, slot * 0.08f);
+    // The pill sits behind the slot and sticks out of it, so slot and pill look like one piece (as in the game's own
+    // effect panels). pillH is the part you see; wide: a bit shorter than the slot, compact: the part under the slot.
+    const float pillH = wide ? std::max(timeH + 6.f, slot * 0.78f) : timeH + 4.f;
 
     // Size of one effect.
     float itemW, itemH;
     if (mini) {
         itemW = itemH = slot;
     } else if (wide) {
-        itemW = slot + (showT ? pillGap + pillW : 0.f);
+        itemW = slot + (showT ? pillW : 0.f);
         itemH = slot;
     } else {
         itemW = showT ? std::max(slot, pillW) : slot;
-        itemH = slot + (showT ? pillGap + pillH : 0.f);
+        itemH = slot + (showT ? pillH : 0.f);
     }
 
     const float t = std::chrono::duration<float>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -410,6 +411,24 @@ void EffectV2::render(DrawUtil& dcGeneric, bool isDefault, bool inEditor) {
         d2d::Color edge = bad ? mix(slotCol, harmfulCol, 0.85f) : mix(slotCol, white, 0.16f);
         d2d::Color fill = slotCol;
         if (urgent) fill = mix(slotCol, urgentCol, 0.35f * pulse);
+
+        // The pill first, so the slot is drawn over its end.
+        d2d::Rect pillRc, timeRc;
+        if (showT) {
+            const float overlap = px * 2.f;
+            if (wide) {
+                const float top = oy + (slot - pillH) / 2.f;
+                pillRc = { slotRc.right - overlap, top, slotRc.right + pillW, top + pillH };
+                timeRc = { slotRc.right, top, slotRc.right + pillW, top + pillH };
+            } else {
+                const float left = ox + (itemW - pillW) / 2.f;
+                pillRc = { left, slotRc.bottom - overlap, left + pillW, slotRc.bottom + pillH };
+                timeRc = { left, slotRc.bottom, left + pillW, slotRc.bottom + pillH };
+            }
+            d2d::Color pillFill = pillCol;
+            if (urgent) pillFill = mix(pillCol, urgentCol, 0.35f * pulse);
+            pixelPill(dc, pillRc, px, borderCol, pillFill);
+        }
 
         pixelSlot(dc, slotRc, px, borderCol, edge, fill);
 
@@ -457,26 +476,13 @@ void EffectV2::render(DrawUtil& dcGeneric, bool isDefault, bool inEditor) {
             dc.drawText(rc, lvl, textCol, font, levelPx, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
         }
 
-        // Time
+        // Time (queued text, drawn on top of everything by the final flush)
         if (showT) {
-            d2d::Rect pillRc;
-            if (wide) {
-                const float px = slotRc.right + pillGap;
-                const float py = oy + (slot - pillH) / 2.f;
-                pillRc = { px, py, px + pillW, py + pillH };
-            } else {
-                const float px = ox + (itemW - pillW) / 2.f;
-                const float py = oy + slot + pillGap;
-                pillRc = { px, py, px + pillW, py + pillH };
-            }
-            d2d::Color pillFill = pillCol;
-            if (urgent) pillFill = mix(pillCol, urgentCol, 0.35f * pulse);
-            pixelPill(dc, pillRc, px, borderCol, pillFill);
             const d2d::Color timeCol = urgent ? mix(textCol, urgentCol, 0.7f) : textCol;
-            const d2d::Rect shadowRc(pillRc.left + px, pillRc.top + px, pillRc.right + px, pillRc.bottom + px);
+            const d2d::Rect shadowRc(timeRc.left + px, timeRc.top + px, timeRc.right + px, timeRc.bottom + px);
             dc.drawText(shadowRc, times[i], d2d::Color(0.f, 0.f, 0.f, 0.4f), font, textPx, DWRITE_TEXT_ALIGNMENT_CENTER,
                         DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-            dc.drawText(pillRc, times[i], timeCol, font, textPx, DWRITE_TEXT_ALIGNMENT_CENTER,
+            dc.drawText(timeRc, times[i], timeCol, font, textPx, DWRITE_TEXT_ALIGNMENT_CENTER,
                         DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
         }
     }
