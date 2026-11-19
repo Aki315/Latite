@@ -94,6 +94,36 @@ namespace {
         return { a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t };
     }
 
+    d2d::Rect shrink(d2d::Rect const& r, float by) { return { r.left + by, r.top + by, r.right - by, r.bottom - by }; }
+
+    // A filled rectangle with its four corners cut by one pixel, which is how the game's own pixel panels look.
+    void stepRect(MCDrawUtil& dc, d2d::Rect const& r, float px, d2d::Color const& color) {
+        if (r.right - r.left <= px * 2.f || r.bottom - r.top <= px * 2.f) {
+            dc.fillRectangle(r, color);
+            return;
+        }
+        dc.fillRectangle({ r.left + px, r.top, r.right - px, r.bottom }, color);
+        dc.fillRectangle({ r.left, r.top + px, r.right, r.bottom - px }, color);
+    }
+
+    // Dark slot: outline, a lighter edge inside it, then the fill.
+    void pixelSlot(MCDrawUtil& dc, d2d::Rect const& r, float px, d2d::Color const& outline, d2d::Color const& edge,
+                   d2d::Color const& fill) {
+        stepRect(dc, r, px, outline);
+        stepRect(dc, shrink(r, px), px, edge);
+        stepRect(dc, shrink(r, px * 2.f), px, fill);
+    }
+
+    // Gray pill: outline, the fill, a light line along the top and a dark one along the bottom.
+    void pixelPill(MCDrawUtil& dc, d2d::Rect const& r, float px, d2d::Color const& outline, d2d::Color const& fill) {
+        stepRect(dc, r, px, outline);
+        const d2d::Rect in = shrink(r, px);
+        stepRect(dc, in, px, fill);
+        dc.fillRectangle({ in.left + px, in.top, in.right - px, in.top + px }, mix(fill, d2d::Color(1.f, 1.f, 1.f, fill.a), 0.35f));
+        dc.fillRectangle({ in.left + px, in.bottom - px, in.right - px, in.bottom },
+                         mix(fill, d2d::Color(0.f, 0.f, 0.f, fill.a), 0.4f));
+    }
+
     // Green while most of the time is left, yellow around the middle, red at the end.
     d2d::Color timeColor(float fraction) {
         const d2d::Color green(0.2f, 0.83f, 0.4f, 1.f);
@@ -126,6 +156,8 @@ EffectV2::EffectV2()
                              LocalizeString::get("client.hudmodule.effectV2.style.wide.desc")));
     style.addEntry(EnumEntry(StyleCompact, LocalizeString::get("client.hudmodule.effectV2.style.compact.name"),
                              LocalizeString::get("client.hudmodule.effectV2.style.compact.desc")));
+    style.addEntry(EnumEntry(StyleMini, LocalizeString::get("client.hudmodule.effectV2.style.mini.name"),
+                             LocalizeString::get("client.hudmodule.effectV2.style.mini.desc")));
     addEnumSetting("style", LocalizeString::get("client.hudmodule.effectV2.style.name"),
                    LocalizeString::get("client.hudmodule.effectV2.style.desc"), style);
 
@@ -151,9 +183,6 @@ EffectV2::EffectV2()
     addSliderSetting("spacing", LocalizeString::get("client.hudmodule.effectV2.spacing.name"),
                      LocalizeString::get("client.hudmodule.effectV2.spacing.desc"), spacing, FloatValue(0.f),
                      FloatValue(40.f), FloatValue(1.f));
-    addSliderSetting("cornerRadius", LocalizeString::get("client.hudmodule.effectV2.cornerRadius.name"),
-                     LocalizeString::get("client.hudmodule.effectV2.cornerRadius.desc"), cornerRadius, FloatValue(0.f),
-                     FloatValue(16.f), FloatValue(0.5f));
 
     // ---- What is shown ----
     addSetting("showLevel", LocalizeString::get("client.hudmodule.effectV2.showLevel.name"),
@@ -179,6 +208,8 @@ EffectV2::EffectV2()
                                    LocalizeString::get("client.hudmodule.effectV2.bar.off.desc")));
     addEnumSetting("barPosition", LocalizeString::get("client.hudmodule.effectV2.bar.name"),
                    LocalizeString::get("client.hudmodule.effectV2.bar.desc"), barPosition);
+    addSetting("barWithTime", LocalizeString::get("client.hudmodule.effectV2.barWithTime.name"),
+               LocalizeString::get("client.hudmodule.effectV2.barWithTime.desc"), barWithTime);
     addSetting("colorBarByTime", LocalizeString::get("client.hudmodule.effectV2.colorBarByTime.name"),
                LocalizeString::get("client.hudmodule.effectV2.colorBarByTime.desc"), colorBarByTime);
     addSetting("barColor", LocalizeString::get("client.hudmodule.effectV2.barColor.name"),
@@ -294,19 +325,22 @@ void EffectV2::render(DrawUtil& dcGeneric, bool isDefault, bool inEditor) {
     }
 
     // ---- Settings ----
-    const bool wide = style.getSelectedKey() == StyleWide;
+    const int styleKey = style.getSelectedKey();
+    const bool mini = styleKey == StyleMini;
+    const bool wide = styleKey == StyleWide;
     const bool horizontal = stacking.getSelectedKey() == StackHorizontal;
     const int barPos = barPosition.getSelectedKey();
     const bool showLvl = std::get<BoolValue>(showLevel);
     const bool lvlOne = std::get<BoolValue>(showLevelOne);
-    const bool showT = std::get<BoolValue>(showTime);
+    const bool showT = std::get<BoolValue>(showTime) && !mini; // Mini has no time, only the bar
     const bool pad = std::get<BoolValue>(padMinutes);
     const bool byTime = std::get<BoolValue>(colorBarByTime);
     const bool tint = std::get<BoolValue>(tintHarmful);
 
     const float slot = std::clamp(static_cast<float>(std::get<FloatValue>(slotSize)), 16.f, 96.f);
     const float gap = std::clamp(static_cast<float>(std::get<FloatValue>(spacing)), 0.f, 40.f);
-    const float radiusPx = std::clamp(static_cast<float>(std::get<FloatValue>(cornerRadius)), 0.f, slot / 2.f);
+    const float px = std::max(1.f, std::round(slot / 20.f)); // one "game pixel"
+    const bool drawBar = barPos != BarOff && (mini || std::get<BoolValue>(barWithTime));
     const float textPx = std::clamp(static_cast<float>(std::get<FloatValue>(textSize)), 8.f, 48.f);
     const float levelPx = std::max(textPx * 0.6f, 8.f);
     const float flashFor = std::max(0.f, static_cast<float>(std::get<FloatValue>(flashSeconds)));
@@ -338,7 +372,9 @@ void EffectV2::render(DrawUtil& dcGeneric, bool isDefault, bool inEditor) {
 
     // Size of one effect.
     float itemW, itemH;
-    if (wide) {
+    if (mini) {
+        itemW = itemH = slot;
+    } else if (wide) {
         itemW = slot + (showT ? pillGap + pillW : 0.f);
         itemH = slot;
     } else {
@@ -362,12 +398,13 @@ void EffectV2::render(DrawUtil& dcGeneric, bool isDefault, bool inEditor) {
         const bool urgent = !infinite && flashFor > 0.f && e.data.duration <= static_cast<int>(flashFor * 20.f);
         const float pulse = urgent ? 0.5f + 0.5f * std::sin(t * 7.f) : 0.f;
 
-        d2d::Color border = tint && isHarmful(e.data.id) ? harmfulCol : borderCol;
+        const bool bad = tint && isHarmful(e.data.id);
+        const d2d::Color white(1.f, 1.f, 1.f, slotCol.a);
+        d2d::Color edge = bad ? mix(slotCol, harmfulCol, 0.85f) : mix(slotCol, white, 0.16f);
         d2d::Color fill = slotCol;
         if (urgent) fill = mix(slotCol, urgentCol, 0.35f * pulse);
 
-        dc.fillRoundedRectangle(slotRc, fill, radiusPx);
-        dc.drawRoundedRectangle(slotRc, border, radiusPx, 1.5f);
+        pixelSlot(dc, slotRc, px, borderCol, edge, fill);
 
         // Icon
         if (const char* name = iconName(e.data.id)) {
@@ -384,7 +421,7 @@ void EffectV2::render(DrawUtil& dcGeneric, bool isDefault, bool inEditor) {
         }
 
         // Bar
-        if (barPos != BarOff) {
+        if (drawBar) {
             const float inset = std::max(3.f, slot * 0.1f);
             const float thick = std::max(2.f, slot * 0.08f);
             const d2d::Color barCol = byTime ? timeColor(e.fraction) : fixedBarCol;
@@ -425,13 +462,15 @@ void EffectV2::render(DrawUtil& dcGeneric, bool isDefault, bool inEditor) {
                 const float py = oy + slot + pillGap;
                 pillRc = { px, py, px + pillW, py + pillH };
             }
-            const float pillRadius = std::min(radiusPx, pillH / 2.f);
             d2d::Color pillFill = pillCol;
             if (urgent) pillFill = mix(pillCol, urgentCol, 0.35f * pulse);
-            dc.fillRoundedRectangle(pillRc, pillFill, pillRadius);
-            dc.drawRoundedRectangle(pillRc, border, pillRadius, 1.5f);
-            dc.drawText(pillRc, times[i], urgent ? mix(textCol, urgentCol, 0.7f) : textCol, font, textPx,
-                        DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            pixelPill(dc, pillRc, px, borderCol, pillFill);
+            const d2d::Color timeCol = urgent ? mix(textCol, urgentCol, 0.7f) : textCol;
+            const d2d::Rect shadowRc(pillRc.left + px, pillRc.top + px, pillRc.right + px, pillRc.bottom + px);
+            dc.drawText(shadowRc, times[i], d2d::Color(0.f, 0.f, 0.f, 0.6f), font, textPx, DWRITE_TEXT_ALIGNMENT_CENTER,
+                        DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            dc.drawText(pillRc, times[i], timeCol, font, textPx, DWRITE_TEXT_ALIGNMENT_CENTER,
+                        DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
         }
     }
 

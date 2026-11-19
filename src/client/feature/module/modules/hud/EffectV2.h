@@ -4,13 +4,12 @@
 #include <map>
 #include <string>
 
-// Your potion effects as small panels, in the style of the Java "Inventory HUD" mod: a dark slot with the effect's
-// icon and its level in the corner, and either a pill with the time left beside it (Wide) or a thin slot with the time
-// under it (Compact). A bar shows how much of the effect is left, green > yellow > red.
+// Your potion effects as small pixel-style panels, like the Java "Inventory HUD" mod: a dark slot with the effect's
+// icon and its level in the corner, and either a gray pill with the time left beside it (Wide), under it (Compact), or
+// no pill at all and a thin bar on the slot that shows how much of the effect is left (Mini).
 // Position and size are set in Latite's HUD editor, like any other HUD module.
 //
 // Everything is drawn by this module (no texture from any other mod); only the game's own effect icons are used.
-class EffectV2 final : public HUDModule {
 public:
     EffectV2();
     ~EffectV2() override = default;
@@ -25,6 +24,7 @@ public:
 private:
     static constexpr int StyleWide = 0;    // icon slot + time pill beside it
     static constexpr int StyleCompact = 1; // icon slot, time under it
+    static constexpr int StyleMini = 2;    // only the icon slot, with the level and the time-left bar
 
     static constexpr int StackVertical = 0;
     static constexpr int StackHorizontal = 1;
@@ -50,12 +50,12 @@ private:
     ValueType slotSize = FloatValue(38.f);     // The square with the icon; the icon fills most of it.
     ValueType spacing = FloatValue(4.f);       // Between two effects.
     ValueType textSize = FloatValue(18.f);
-    ValueType cornerRadius = FloatValue(4.f);
+    ValueType barWithTime = BoolValue(false);  // Also draw the bar in the Wide / Compact styles (Mini always has it).
     ValueType colorBarByTime = BoolValue(true);
     ValueType barColor = ColorValue(0.2f, 0.83f, 0.4f, 1.f);
-    ValueType slotColor = ColorValue(0.13f, 0.14f, 0.17f, 0.92f);
-    ValueType pillColor = ColorValue(0.42f, 0.47f, 0.55f, 0.92f);
-    ValueType borderColor = ColorValue(0.04f, 0.05f, 0.07f, 1.f);
+    ValueType slotColor = ColorValue(0.08f, 0.08f, 0.08f, 1.f);
+    ValueType pillColor = ColorValue(0.54f, 0.54f, 0.54f, 1.f);
+    ValueType borderColor = ColorValue(0.f, 0.f, 0.f, 1.f);
     ValueType textColor = ColorValue(1.f, 1.f, 1.f, 1.f);
     ValueType tintHarmful = BoolValue(true);   // Bad effects (poison, slowness...) get a red border.
     ValueType flashSeconds = FloatValue(10.f); // The last seconds flash and the time turns red. 0 = never.
