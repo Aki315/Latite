@@ -385,6 +385,13 @@ void EffectV2::render(DrawUtil& dcGeneric, bool isDefault, bool inEditor) {
     const float t = std::chrono::duration<float>(std::chrono::steady_clock::now().time_since_epoch()).count();
 
     // ---- Draw ----
+    // The module's shapes and the icons have to land in the order they are drawn in: icons are always drawn straight
+    // away, so the shapes must be too (otherwise the slots are drawn over the icons at the final flush, and the queued
+    // shapes get mixed up with the image draws). The text is queued and drawn by the final flush, on top of everything.
+    // Same way TargetHUD does it.
+    dc.flush(false);
+    dc.setImmediate(true);
+
     for (size_t i = 0; i < entries.size(); ++i) {
         auto const& e = entries[i];
         const float ox = horizontal ? static_cast<float>(i) * (itemW + gap) : 0.f;
@@ -480,5 +487,6 @@ void EffectV2::render(DrawUtil& dcGeneric, bool isDefault, bool inEditor) {
     rect.right = rect.left + totalW;
     rect.bottom = rect.top + totalH;
 
+    dc.setImmediate(false);
     dc.flush();
 }
