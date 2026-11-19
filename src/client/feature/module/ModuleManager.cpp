@@ -25,6 +25,7 @@
 #include "modules/game/ArmorNametag.h"
 #include "modules/game/HealthIndicator.h"
 #include "modules/hud/EffectStatus.h"
+#include "modules/hud/EffectV2.h"
 
 #include "modules/visual/Fullbright.h"
 #include "modules/visual/MotionBlur.h"
@@ -132,6 +133,7 @@ ModuleManager::ModuleManager() {
     this->items.push_back(std::make_shared<HealthIndicator>());
     this->items.push_back(std::make_shared<ArmorNametag>());
     this->items.push_back(std::make_shared<EffectStatus>());
+    this->items.push_back(std::make_shared<EffectV2>());
 
     for (auto& mod : items) {
         mod->onInit();
