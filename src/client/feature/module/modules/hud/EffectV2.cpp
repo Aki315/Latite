@@ -193,7 +193,7 @@ EffectV2::EffectV2()
                LocalizeString::get("client.hudmodule.effectV2.showTime.desc"), showTime);
     addSetting("padMinutes", LocalizeString::get("client.hudmodule.effectV2.padMinutes.name"),
                LocalizeString::get("client.hudmodule.effectV2.padMinutes.desc"), padMinutes, "showTime"_istrue);
-    addSliderSetting("textSize", LocalizeString::get("client.hudmodule.effectV2.textSize.name"),
+    addSliderSetting("textSizePx", LocalizeString::get("client.hudmodule.effectV2.textSize.name"),
                      LocalizeString::get("client.hudmodule.effectV2.textSize.desc"), textSize, FloatValue(8.f),
                      FloatValue(48.f), FloatValue(1.f));
 
@@ -214,20 +214,20 @@ EffectV2::EffectV2()
                LocalizeString::get("client.hudmodule.effectV2.colorBarByTime.desc"), colorBarByTime);
     addSetting("barColor", LocalizeString::get("client.hudmodule.effectV2.barColor.name"),
                LocalizeString::get("client.hudmodule.effectV2.barColor.desc"), barColor, "colorBarByTime"_isfalse);
-    addSliderSetting("flashSeconds", LocalizeString::get("client.hudmodule.effectV2.flashSeconds.name"),
+    addSliderSetting("warnAt", LocalizeString::get("client.hudmodule.effectV2.flashSeconds.name"),
                      LocalizeString::get("client.hudmodule.effectV2.flashSeconds.desc"), flashSeconds, FloatValue(0.f),
                      FloatValue(60.f), FloatValue(1.f));
 
     // ---- Colors ----
-    addSetting("slotColor", LocalizeString::get("client.hudmodule.effectV2.slotColor.name"),
+    addSetting("slotColorPx", LocalizeString::get("client.hudmodule.effectV2.slotColor.name"),
                LocalizeString::get("client.hudmodule.effectV2.slotColor.desc"), slotColor);
-    addSetting("pillColor", LocalizeString::get("client.hudmodule.effectV2.pillColor.name"),
+    addSetting("pillColorPx", LocalizeString::get("client.hudmodule.effectV2.pillColor.name"),
                LocalizeString::get("client.hudmodule.effectV2.pillColor.desc"), pillColor);
-    addSetting("borderColor", LocalizeString::get("client.hudmodule.effectV2.borderColor.name"),
+    addSetting("borderColorPx", LocalizeString::get("client.hudmodule.effectV2.borderColor.name"),
                LocalizeString::get("client.hudmodule.effectV2.borderColor.desc"), borderColor);
     addSetting("textColor", LocalizeString::get("client.hudmodule.effectV2.textColor.name"),
                LocalizeString::get("client.hudmodule.effectV2.textColor.desc"), textColor);
-    addSetting("tintHarmful", LocalizeString::get("client.hudmodule.effectV2.tintHarmful.name"),
+    addSetting("redBorderBad", LocalizeString::get("client.hudmodule.effectV2.tintHarmful.name"),
                LocalizeString::get("client.hudmodule.effectV2.tintHarmful.desc"), tintHarmful);
 
     addSetting("hideVanilla", LocalizeString::get("client.hudmodule.effectV2.hideVanilla.name"),
@@ -365,9 +365,9 @@ void EffectV2::render(DrawUtil& dcGeneric, bool isDefault, bool inEditor) {
         times.push_back(formatTime(e.data.duration, pad));
         pillW = std::max(pillW, dc.getTextSize(times.back(), font, textPx, false).x + pillPad * 2.f);
     }
-    if (wide) pillW = std::max(pillW, slot * 1.5f);
+    if (wide) pillW = std::max(pillW, slot * 1.9f);
 
-    const float pillH = wide ? std::max(timeH + 6.f, slot * 0.72f) : timeH + 4.f;
+    const float pillH = wide ? std::max(timeH + 6.f, slot * 0.86f) : timeH + 4.f;
     const float pillGap = wide ? std::max(3.f, slot * 0.1f) : std::max(2.f, slot * 0.08f);
 
     // Size of one effect.
@@ -420,7 +420,7 @@ void EffectV2::render(DrawUtil& dcGeneric, bool isDefault, bool inEditor) {
                 &tex, SDK::ResourceLocation(std::string("textures/ui/") + name, SDK::ResourceFileSystem::UserPackage),
                 false);
             if (tex.textureData) {
-                const float icon = slot * 0.72f;
+                const float icon = slot * 0.66f;
                 const float cx = slotRc.left + (slot - icon) / 2.f;
                 const float cy = slotRc.top + (slot - icon) / 2.f;
                 dc.drawImage(tex, { cx, cy }, { icon, icon }, d2d::Colors::WHITE);
@@ -474,7 +474,7 @@ void EffectV2::render(DrawUtil& dcGeneric, bool isDefault, bool inEditor) {
             pixelPill(dc, pillRc, px, borderCol, pillFill);
             const d2d::Color timeCol = urgent ? mix(textCol, urgentCol, 0.7f) : textCol;
             const d2d::Rect shadowRc(pillRc.left + px, pillRc.top + px, pillRc.right + px, pillRc.bottom + px);
-            dc.drawText(shadowRc, times[i], d2d::Color(0.f, 0.f, 0.f, 0.6f), font, textPx, DWRITE_TEXT_ALIGNMENT_CENTER,
+            dc.drawText(shadowRc, times[i], d2d::Color(0.f, 0.f, 0.f, 0.4f), font, textPx, DWRITE_TEXT_ALIGNMENT_CENTER,
                         DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
             dc.drawText(pillRc, times[i], timeCol, font, textPx, DWRITE_TEXT_ALIGNMENT_CENTER,
                         DWRITE_PARAGRAPH_ALIGNMENT_CENTER);

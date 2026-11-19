@@ -50,7 +50,7 @@ private:
     ValueType padMinutes = BoolValue(false);   // 01:26 instead of 1:26
     ValueType slotSize = FloatValue(38.f);     // The square with the icon; the icon fills most of it.
     ValueType spacing = FloatValue(4.f);       // Between two effects.
-    ValueType textSize = FloatValue(18.f);
+    ValueType textSize = FloatValue(14.f);
     ValueType barWithTime = BoolValue(false);  // Also draw the bar in the Wide / Compact styles (Mini always has it).
     ValueType colorBarByTime = BoolValue(true);
     ValueType barColor = ColorValue(0.2f, 0.83f, 0.4f, 1.f);
@@ -58,8 +58,8 @@ private:
     ValueType pillColor = ColorValue(0.54f, 0.54f, 0.54f, 1.f);
     ValueType borderColor = ColorValue(0.f, 0.f, 0.f, 1.f);
     ValueType textColor = ColorValue(1.f, 1.f, 1.f, 1.f);
-    ValueType tintHarmful = BoolValue(true);   // Bad effects (poison, slowness...) get a red border.
-    ValueType flashSeconds = FloatValue(10.f); // The last seconds flash and the time turns red. 0 = never.
+    ValueType tintHarmful = BoolValue(false);  // Bad effects (poison, slowness...) get a red border.
+    ValueType flashSeconds = FloatValue(0.f);  // The last seconds flash and the time turns red. 0 = never.
     ValueType hideVanilla = BoolValue(true);
 
     // The longest time each effect has had since it was applied, to know how full its bar is. Keyed by effect id;
