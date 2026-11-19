@@ -10,6 +10,7 @@
 // Position and size are set in Latite's HUD editor, like any other HUD module.
 //
 // Everything is drawn by this module (no texture from any other mod); only the game's own effect icons are used.
+class EffectV2 final : public HUDModule {
 public:
     EffectV2();
     ~EffectV2() override = default;
