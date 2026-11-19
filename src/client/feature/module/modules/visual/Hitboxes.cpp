@@ -103,30 +103,44 @@ namespace {
     }
 
     // Can a hit land on this box from here? True when any part of it can be reached without something stopping the line,
-    // so a player who is only partly covered (his hitbox sticking out of the cobwebs or blocks) still counts. The box
-    // is sampled on a grid of points (3 across, 5 up, 3 deep, a little inside the edges); the first clear line is enough,
-    // and a covered player's lines stop after a block or two, so this stays cheap.
+    // so a player whose hitbox only sticks out a little from the cobwebs or blocks still counts. The box is cut along
+    // the block grid into the pieces that lie in each block; a piece inside a block that stops hits is skipped, and
+    // every other piece is tried with a line to its middle and to each of its corners (a little inside). The first
+    // clear line is enough. A covered player has almost no pieces left to try, so this stays cheap.
     bool canReach(SDK::BlockSource* region, Vec3 const& eye, AABB const& bb, bool websStop, bool blocksStop) {
-        constexpr float inset = 0.03f;
-        const float lx = bb.lower.x + inset, hx = bb.higher.x - inset;
-        const float ly = bb.lower.y + inset, hy = bb.higher.y - inset;
-        const float lz = bb.lower.z + inset, hz = bb.higher.z - inset;
-        if (hx <= lx || hy <= ly || hz <= lz) return !lineBlocked(region, eye,
-                           Vec3 { (bb.lower.x + bb.higher.x) * 0.5f, (bb.lower.y + bb.higher.y) * 0.5f,
-                                  (bb.lower.z + bb.higher.z) * 0.5f },
-                           websStop, blocksStop);
+        constexpr float eps = 1e-4f;
+        const int x0 = static_cast<int>(std::floor(bb.lower.x)), x1 = static_cast<int>(std::floor(bb.higher.x - eps));
+        const int y0 = static_cast<int>(std::floor(bb.lower.y)), y1 = static_cast<int>(std::floor(bb.higher.y - eps));
+        const int z0 = static_cast<int>(std::floor(bb.lower.z)), z1 = static_cast<int>(std::floor(bb.higher.z - eps));
+        if (x1 - x0 > 3 || y1 - y0 > 5 || z1 - z0 > 3) return true; // Not a player sized box: don't guess.
 
-        // The point of the box closest to your eyes first: it is the most likely to be clear.
-        const Vec3 closest { std::clamp(eye.x, lx, hx), std::clamp(eye.y, ly, hy), std::clamp(eye.z, lz, hz) };
-        if (!lineBlocked(region, eye, closest, websStop, blocksStop)) return true;
+        for (int cy = y0; cy <= std::max(y1, y0); ++cy) {
+            for (int cx = x0; cx <= std::max(x1, x0); ++cx) {
+                for (int cz = z0; cz <= std::max(z1, z0); ++cz) {
+                    if (cy >= -64 && cy <= 320) {
+                        const HitBlock here = classify(region->getBlock(BlockPos { cx, cy, cz }));
+                        if ((here == HitBlock::Stops && blocksStop) || (here == HitBlock::Web && websStop)) continue;
+                    }
 
-        for (int iy = 0; iy < 5; ++iy) {
-            const float y = ly + (hy - ly) * (static_cast<float>(iy) / 4.f);
-            for (int ix = 0; ix < 3; ++ix) {
-                const float x = lx + (hx - lx) * (static_cast<float>(ix) / 2.f);
-                for (int iz = 0; iz < 3; ++iz) {
-                    const float z = lz + (hz - lz) * (static_cast<float>(iz) / 2.f);
-                    if (!lineBlocked(region, eye, Vec3 { x, y, z }, websStop, blocksStop)) return true;
+                    // The part of the box inside this block.
+                    const float lx = std::max(bb.lower.x, static_cast<float>(cx)), hx = std::min(bb.higher.x, static_cast<float>(cx + 1));
+                    const float ly = std::max(bb.lower.y, static_cast<float>(cy)), hy = std::min(bb.higher.y, static_cast<float>(cy + 1));
+                    const float lz = std::max(bb.lower.z, static_cast<float>(cz)), hz = std::min(bb.higher.z, static_cast<float>(cz + 1));
+                    if (hx < lx || hy < ly || hz < lz) continue;
+
+                    const float ix = std::min(0.02f, (hx - lx) * 0.25f);
+                    const float iy = std::min(0.02f, (hy - ly) * 0.25f);
+                    const float iz = std::min(0.02f, (hz - lz) * 0.25f);
+                    const float xs[3] = { lx + ix, (lx + hx) * 0.5f, hx - ix };
+                    const float ys[3] = { ly + iy, (ly + hy) * 0.5f, hy - iy };
+                    const float zs[3] = { lz + iz, (lz + hz) * 0.5f, hz - iz };
+                    for (float y : ys) {
+                        for (float x : xs) {
+                            for (float z : zs) {
+                                if (!lineBlocked(region, eye, Vec3 { x, y, z }, websStop, blocksStop)) return true;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -168,6 +182,9 @@ Hitboxes::Hitboxes()
                LocalizeString::get("client.module.hitboxes.websBlock.desc"), websBlock, "needClearLine"_istrue);
     addSetting("blocksBlock", LocalizeString::get("client.module.hitboxes.blocksBlock.name"),
                LocalizeString::get("client.module.hitboxes.blocksBlock.desc"), blocksBlock, "needClearLine"_istrue);
+    addSetting("coverUsesDrawnBox", LocalizeString::get("client.module.hitboxes.coverUsesDrawnBox.name"),
+               LocalizeString::get("client.module.hitboxes.coverUsesDrawnBox.desc"), coverUsesDrawnBox,
+               "needClearLine"_istrue);
     addSetting("rangeColor", LocalizeString::get("client.module.hitboxes.rangeColor.name"),
                LocalizeString::get("client.module.hitboxes.rangeColor.desc"), rangeColor, "rangeColorOn"_istrue);
     addSliderSetting("widthScale", LocalizeString::get("client.module.hitboxes.widthScale.name"),
@@ -243,6 +260,7 @@ void Hitboxes::onRenderLevel(RenderLevelEvent& event) {
     const bool needLine = std::get<BoolValue>(needClearLine);
     const bool websStop = std::get<BoolValue>(websBlock);
     const bool blocksStop = std::get<BoolValue>(blocksBlock);
+    const bool coverDrawn = std::get<BoolValue>(coverUsesDrawnBox);
     SDK::BlockSource* region = SDK::ClientInstance::get()->getRegion();
 
     const bool hideOthers = std::get<BoolValue>(hideEntities);
@@ -284,9 +302,7 @@ void Hitboxes::onRenderLevel(RenderLevelEvent& event) {
         // In hit range: close enough that a hit would land. Measured from your eyes to the real box, before the
         // visual scaling below. Only for other players.
         bool inRange = checkRange && entt != lp && entt->isPlayer() && distanceToBox(selfEye, bb) <= reach;
-        // And a hit has to be able to land: a player who covered himself with blocks (or cobwebs, if those count) is
-        // in reach but not hittable, so the box keeps its normal color.
-        if (inRange && needLine && region) inRange = canReach(region, selfEye, bb, websStop, blocksStop);
+        const AABB realBox = bb; // Before the visual scaling below; the cover check may use either.
 
         // Max Distance: too far away, so not drawn at all.
         float distFade = 0.f; // 0 = right next to you, 1 = at the max distance
@@ -313,6 +329,12 @@ void Hitboxes::onRenderLevel(RenderLevelEvent& event) {
             bb.lower = { center.x - halfW, origLowerY, center.z - halfD };
             bb.higher = { center.x + halfW, origLowerY + newHeight, center.z + halfD };
         }
+
+        // And a hit has to be able to land: a player who covered himself with blocks (or cobwebs, if those count) is
+        // in reach but not hittable, so the box keeps its normal color. By default this looks at the box you see, with
+        // your Width / Height Scale, so any part of it sticking out of the cover counts, however small. That only
+        // changes the color: hits still land on the real box.
+        if (inRange && needLine && region) inRange = canReach(region, selfEye, coverDrawn ? bb : realBox, websStop, blocksStop);
 
         bool willShowLine = std::get<BoolValue>(showLine) && (!entt->isPlayer() || !connectionInfo ||
                                                               connectionInfo->hostIpAddress.empty() || entt == lp);

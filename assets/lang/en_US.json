@@ -627,6 +627,8 @@
         "client.module.hitboxes.websBlock.desc": "A cobweb between you and the player counts as cover, like a block. Turn this off if cobwebs do not stop your hits on the server you play.",
         "client.module.hitboxes.blocksBlock.name": "Blocks Count As Cover",
         "client.module.hitboxes.blocksBlock.desc": "Solid blocks between you and the player count as cover. Air, water and small things like grass, flowers and torches do not. Turn this off to only use cobwebs as cover.",
+        "client.module.hitboxes.coverUsesDrawnBox.name": "Check The Drawn Box",
+        "client.module.hitboxes.coverUsesDrawnBox.desc": "The cover check looks at the hitbox you see, with your Width Scale and Height Scale, so any part of it sticking out of the cobwebs or blocks makes the color change, however small. Turn this off to check the real hitbox instead. It only changes the color: hits always land on the real hitbox.",
         "client.module.hitboxes.rangeColor.name": "In Range Color",
         "client.module.hitboxes.rangeColor.desc": "The color of the hitbox while the player is in range.",
         "client.module.hitboxes.widthScale.name": "Width Scale",

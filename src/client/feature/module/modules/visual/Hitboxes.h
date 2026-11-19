@@ -22,6 +22,7 @@ private:
     ValueType needClearLine = BoolValue(true);
     ValueType websBlock = BoolValue(true);   // Cobwebs count as something in the way.
     ValueType blocksBlock = BoolValue(true); // Solid blocks count as something in the way.
+    ValueType coverUsesDrawnBox = BoolValue(true); // The cover check looks at the box you see (Width / Height Scale).
     ValueType rangeColor = ColorValue(1.f, 0.2f, 0.2f, 1.f);
 
     // Visual-only multipliers applied to the drawn box (1.0 = the real bounding box).
